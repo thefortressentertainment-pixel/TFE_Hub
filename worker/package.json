@@ -1,0 +1,16 @@
+{
+  "name": "fortress-worker",
+  "version": "0.1.0",
+  "private": true,
+  "main": "src/processor.js",
+  "scripts": {
+    "start": "node src/processor.js"
+  },
+  "dependencies": {
+    "bull": "^4.10.0",
+    "dotenv": "^16.0.0",
+    "pg": "^8.11.0",
+    "sharp": "^0.35.3",
+    "tesseract.js": "^7.0.0"
+  }
+}

@@ -1,0 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE TABLE IF NOT EXISTS users (id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), email VARCHAR(255));
+CREATE TABLE IF NOT EXISTS receipts (id SERIAL PRIMARY KEY, user_id UUID, s3_key VARCHAR(500), vendor VARCHAR(255), date DATE, total NUMERIC(15,2), items JSONB DEFAULT '[]', category VARCHAR(100), status VARCHAR(50), created_at TIMESTAMP DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS analytics_daily (id SERIAL PRIMARY KEY, user_id UUID, date DATE, total_spent NUMERIC(15,2) DEFAULT 0, receipt_count INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT NOW());

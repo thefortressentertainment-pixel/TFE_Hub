@@ -1,0 +1,81 @@
+client:
+  name: basic
+  file-system: device-agnostic
+tools: {}
+targets:
+  "FortressMacOS-arm64-apple-macosx-debug.exe": ["<FortressMacOS-arm64-apple-macosx-debug.exe>"]
+  "FortressMacOS-arm64-apple-macosx-debug.module": ["<FortressMacOS-arm64-apple-macosx-debug.module>"]
+  "PackageStructure": ["<PackageStructure>"]
+  "main": ["<FortressMacOS-arm64-apple-macosx-debug.exe>","<FortressMacOS-arm64-apple-macosx-debug.module>"]
+  "test": ["<FortressMacOS-arm64-apple-macosx-debug.exe>","<FortressMacOS-arm64-apple-macosx-debug.module>"]
+default: "main"
+nodes:
+  "/Users/tfe/fortress-hub/native-macos/Sources/FortressMacOS/":
+    is-directory-structure: true
+    content-exclusion-patterns: [".git",".build"]
+  "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS":
+    is-mutated: true
+commands:
+  "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS-entitlement.plist":
+    tool: write-auxiliary-file
+    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS-entitlement.plist"]
+    description: "Write auxiliary file /Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS-entitlement.plist"
+
+  "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/sources":
+    tool: write-auxiliary-file
+    inputs: ["<sources-file-list>","/Users/tfe/fortress-hub/native-macos/Sources/FortressMacOS/main.swift"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/sources"]
+    description: "Write auxiliary file /Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/sources"
+
+  "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.product/Objects.LinkFileList":
+    tool: write-auxiliary-file
+    inputs: ["<link-file-list>","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swift.o"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.product/Objects.LinkFileList"
+
+  "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/swift-version-39B54973F684ADAB.txt":
+    tool: write-auxiliary-file
+    inputs: ["<swift-get-version>","/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/swift-version-39B54973F684ADAB.txt"]
+    always-out-of-date: "true"
+    description: "Write auxiliary file /Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/swift-version-39B54973F684ADAB.txt"
+
+  "<FortressMacOS-arm64-apple-macosx-debug.exe>":
+    tool: phony
+    inputs: ["<FortressMacOS-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    outputs: ["<FortressMacOS-arm64-apple-macosx-debug.exe>"]
+
+  "<FortressMacOS-arm64-apple-macosx-debug.module>":
+    tool: phony
+    inputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swift.o","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/Modules/FortressMacOS.swiftmodule"]
+    outputs: ["<FortressMacOS-arm64-apple-macosx-debug.module>"]
+
+  "C.FortressMacOS-arm64-apple-macosx-debug.exe":
+    tool: shell
+    inputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swift.o","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.product/Objects.LinkFileList"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS"]
+    description: "Linking ./.build/arm64-apple-macosx/debug/FortressMacOS"
+    args: ["/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-L","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug","-o","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS","-module-name","FortressMacOS","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_FortressMacOS_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx14.0","-Xlinker","-add_ast_path","-Xlinker","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/Modules/FortressMacOS.swiftmodule","-plugin-path","/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g"]
+
+  "C.FortressMacOS-arm64-apple-macosx-debug.exe-entitlements":
+    tool: shell
+    inputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS-entitlement.plist"]
+    outputs: ["<FortressMacOS-arm64-apple-macosx-debug.exe-CodeSigning>"]
+    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/FortressMacOS"
+    args: ["codesign","--force","--sign","-","--entitlements","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS-entitlement.plist","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS"]
+
+  "C.FortressMacOS-arm64-apple-macosx-debug.module":
+    tool: shell
+    inputs: ["/Users/tfe/fortress-hub/native-macos/Sources/FortressMacOS/main.swift","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/swift-version-39B54973F684ADAB.txt","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/sources"]
+    outputs: ["/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swift.o","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/Modules/FortressMacOS.swiftmodule"]
+    description: "Compiling Swift Module 'FortressMacOS' (1 sources)"
+    args: ["/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc","-module-name","FortressMacOS","-emit-dependencies","-emit-module","-emit-module-path","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/Modules/FortressMacOS.swiftmodule","-output-file-map","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/output-file-map.json","-incremental","-c","@/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/sources","-I","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx14.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j8","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","FortressMacOS_main","-parse-as-library","-color-diagnostics","-swift-version","6","-plugin-path","/Applications/Xcode-beta.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing","-sdk","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-F","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-I","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-L","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib","-g","-Xcc","-isysroot","-Xcc","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk","-Xcc","-F","-Xcc","/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks","-Xcc","-fPIC","-Xcc","-g","-package-name","native_macos"]
+
+  "PackageStructure":
+    tool: package-structure-tool
+    inputs: ["/Users/tfe/fortress-hub/native-macos/Sources/FortressMacOS/","/Users/tfe/fortress-hub/native-macos/Package.swift","/Users/tfe/fortress-hub/native-macos/Package.resolved"]
+    outputs: ["<PackageStructure>"]
+    description: "Planning build"
+    allow-missing-inputs: true
+

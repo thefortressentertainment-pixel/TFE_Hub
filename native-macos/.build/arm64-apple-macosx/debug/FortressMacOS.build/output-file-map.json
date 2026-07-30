@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/primary.swiftdeps"
+  },
+  "/Users/tfe/fortress-hub/native-macos/Sources/FortressMacOS/main.swift": {
+    "dependencies": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.d",
+    "object": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swift.o",
+    "swiftmodule": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.swiftdeps",
+    "diagnostics": "/Users/tfe/fortress-hub/native-macos/.build/arm64-apple-macosx/debug/FortressMacOS.build/main.dia"
+  }
+}

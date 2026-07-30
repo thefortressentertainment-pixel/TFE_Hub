@@ -50,6 +50,39 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
   }
 });
 
+app.post('/api/native-vision', async (req, res) => {
+  try {
+    const text = req.body && req.body.text ? String(req.body.text) : '';
+    const source = req.body && req.body.source ? String(req.body.source) : 'native-vision';
+    if (!text.trim()) return res.status(400).json({ error: 'No OCR text provided' });
+
+    const profileId = req.body && req.body.profileId ? req.body.profileId : null;
+    if (!profileId) {
+      return res.status(400).json({ error: 'Please choose a profile before sending native OCR data' });
+    }
+
+    const profileCheck = await pool.query('SELECT id FROM profiles WHERE id = $1', [profileId]);
+    if (!profileCheck.rows.length) {
+      return res.status(400).json({ error: 'Selected profile was not found' });
+    }
+
+    const vendor = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)[0] || source;
+    const totalMatch = text.match(/(?<!\d)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2}))(?!\d)/g);
+    const total = totalMatch && totalMatch.length ? Number(totalMatch[totalMatch.length - 1].replace(/,/g, '')) : 0;
+    const dateMatch = text.match(/(\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/);
+    const date = dateMatch ? dateMatch[1] : new Date().toISOString().split('T')[0];
+
+    const insert = `INSERT INTO receipts (user_id, s3_key, vendor, date, total, items, category, status, profile_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`;
+    const values = [null, source, vendor, date, total, JSON.stringify([]), 'uncategorized', 'processed', profileId];
+    const result = await pool.query(insert, values);
+
+    res.json({ success: true, receiptId: result.rows[0].id, profileId, vendor, total, date });
+  } catch (e) {
+    console.error('Native vision import error', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.get('/api/job/:id', async (req, res) => {
   try {
     const job = await receiptQueue.getJob(req.params.id);

@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: tfe-hub
+    runtime: node
+    plan: free
+    buildCommand: |
+      npm install --prefix backend
+      npm install --prefix worker
+      npm run build --prefix frontend
+    startCommand: node backend/src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+
+  - type: worker
+    name: tfe-hub-worker
+    runtime: node
+    plan: free
+    buildCommand: |
+      npm install --prefix backend
+      npm install --prefix worker
+    startCommand: node worker/src/processor.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false

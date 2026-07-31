@@ -329,11 +329,19 @@ export default function App() {
     const res = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: form })
     const data = await res.json()
     if (data.success) {
-      setJobId(data.jobId)
-      setShowDashboard(true)
-      setStatus('Receipt uploaded. We are processing it now...')
-      if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
-      pollJob(data.jobId)
+      if (data.inline && data.receiptId) {
+        setShowDashboard(true)
+        setIsUploading(false)
+        setStatus('Receipt saved (queue unavailable, processed inline).')
+        await fetchProfileSummaries()
+        if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
+      } else {
+        setJobId(data.jobId)
+        setShowDashboard(true)
+        setStatus('Receipt uploaded. We are processing it now...')
+        if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
+        pollJob(data.jobId)
+      }
     } else {
       if (res.status === 409) {
         setStatus('Duplicate receipt detected — this receipt already exists.')

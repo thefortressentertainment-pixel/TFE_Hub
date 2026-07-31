@@ -3,11 +3,7 @@ services:
     name: tfe-hub
     runtime: node
     plan: free
-    buildCommand: |
-      NODE_ENV=development npm install --prefix frontend
-      npm install --prefix backend
-      npm install --prefix worker
-      npm run build --prefix frontend
+    buildCommand: ./scripts/render-build.sh
     startCommand: node backend/src/server.js
     healthCheckPath: /health
     envVars:
@@ -26,9 +22,7 @@ services:
     name: tfe-hub-worker
     runtime: node
     plan: free
-    buildCommand: |
-      npm install --prefix backend
-      npm install --prefix worker
+    buildCommand: ./scripts/render-build.sh
     startCommand: node worker/src/processor.js
     healthCheckPath: /health
     envVars:

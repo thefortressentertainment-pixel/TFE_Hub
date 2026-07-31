@@ -933,7 +933,6 @@ export default function App() {
         </div>
       ) : (
       <>
-      <div className="app">
         <header className="app-header">
           <div className="brand">
             <h1>ReceiptVault</h1>
@@ -1264,7 +1263,6 @@ export default function App() {
             )}
           </div>
         </div>
-      </div>
       </div>
 
       {editReceipt && (

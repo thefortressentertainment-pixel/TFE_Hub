@@ -3,7 +3,9 @@ import { io } from 'socket.io-client'
 import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
 
 function resolveApiBase() {
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  const saved = localStorage.getItem('fortress_api_base')
+  if (saved) return saved.replace(/\/+$/, '')
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL.replace(/\/+$/, '')
   if (isNative()) {
     return 'http://localhost:4002'
   }
@@ -83,6 +85,15 @@ export default function App() {
   const [editForm, setEditForm] = useState({})
 
   const [errorMsg, setErrorMsg] = useState('')
+
+  const [showSettings, setShowSettings] = useState(false)
+  const [backendUrlInput, setBackendUrlInput] = useState(API_BASE)
+
+  const saveBackendUrl = () => {
+    const url = backendUrlInput.trim().replace(/\/+$/, '')
+    localStorage.setItem('fortress_api_base', url)
+    window.location.reload()
+  }
 
   const [activeShift, setActiveShift] = useState(null)
   const [shiftElapsed, setShiftElapsed] = useState(0)
@@ -732,9 +743,34 @@ export default function App() {
       <div className="scanlines" />
       <div className="pipboy-shell">
         <div className="pipboy-title flicker">
-          <span className="vault-chip">Vault-Tec / Interface</span>
+          <div className="flex-between" style={{ width: '100%' }}>
+            <span className="vault-chip">Vault-Tec / Interface</span>
+            <button className="btn-sm" onClick={() => setShowSettings(!showSettings)}>
+              {showSettings ? 'Close' : 'Settings'}
+            </button>
+          </div>
           <h1>Fortress Hub // Pip-Boy Link</h1>
           <p>Receipt routing stable. Vault profile sync active.</p>
+          {showSettings && (
+            <div className="status-box" style={{ marginTop: 4 }}>
+              <div className="flex-between" style={{ marginBottom: 8 }}>
+                <strong>Backend URL</strong>
+                <span className="muted">hosted web page</span>
+              </div>
+              <div className="flex" style={{ gap: 6 }}>
+                <input
+                  placeholder="https://your-app.trycloudflare.com"
+                  value={backendUrlInput}
+                  onChange={e => setBackendUrlInput(e.target.value)}
+                  style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #57643c', background: 'rgba(5,10,7,0.9)', color: '#f4f8d9', font: 'inherit', fontSize: 13 }}
+                />
+                <button className="btn-sm" onClick={saveBackendUrl}>Save</button>
+              </div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Current: {API_BASE || '(same origin)'}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="stats-grid">

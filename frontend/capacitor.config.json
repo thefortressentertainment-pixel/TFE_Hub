@@ -1,6 +1,6 @@
 {
-  "appId": "com.fortresshub.app",
-  "appName": "Fortress Hub",
+  "appId": "com.receiptvault.app",
+  "appName": "ReceiptVault",
   "webDir": "dist",
   "server": {
     "androidScheme": "https",
@@ -8,11 +8,11 @@
   },
   "ios": {
     "contentInset": "automatic",
-    "backgroundColor": "#030503"
+    "backgroundColor": "#f6f7f9"
   },
   "plugins": {
     "BackgroundGeolocation": {
-      "backgroundMessage": "Fortress Hub is tracking your shift miles",
+      "backgroundMessage": "ReceiptVault is tracking your shift miles",
       "backgroundTitle": "Shift in progress"
     }
   }

@@ -1,6 +1,6 @@
 {
-  "name": "Fortress Hub",
-  "short_name": "Fortress",
+  "name": "ReceiptVault",
+  "short_name": "ReceiptVault",
   "description": "Receipt tracking & business expense manager",
   "start_url": "/",
   "display": "standalone",

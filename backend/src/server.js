@@ -108,11 +108,32 @@ if (fs.existsSync(distDir)) {
 }
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/privacy', (req, res) => {
+  res.type('html').send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ReceiptVault — Privacy Policy</title></head>
+<body style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;max-width:680px;margin:40px auto;padding:0 20px;color:#101828;line-height:1.6">
+<h1>ReceiptVault Privacy Policy</h1>
+<p><em>Last updated: July 31, 2026</em></p>
+<h2>What we collect</h2>
+<p><strong>Account:</strong> your email address and a password (stored securely, hashed).</p>
+<p><strong>Receipts:</strong> images you upload, plus the vendor, date, and amount we read from them.</p>
+<p><strong>Location:</strong> with your permission, we track location only while a shift is active, to calculate mileage for tax purposes.</p>
+<h2>How we use it</h2>
+<p>Your data is used solely to provide the ReceiptVault service: storing receipts, tracking expenses, and calculating mileage. We do not sell your data.</p>
+<h2>Storage</h2>
+<p>Data is stored on secured cloud servers. Receipt images are processed to extract text and stored for your records.</p>
+<h2>Your rights</h2>
+<p>You may delete receipts, profiles, and your account at any time. To delete your account, email support with your account email and we will remove your data within 30 days.</p>
+<h2>Contact</h2>
+<p>For privacy questions or account deletion, contact: <strong>support@receiptvault.app</strong></p>
+</body></html>`);
+});
 app.get('/', (req, res) => {
   if (fs.existsSync(path.join(distDir, 'index.html'))) {
     return res.sendFile(path.join(distDir, 'index.html'));
   }
-  res.json({ app: 'Fortress Hub backend', status: 'ok' });
+  res.json({ app: 'ReceiptVault backend', status: 'ok' });
 });
 
 const authSchema = z.object({
@@ -505,7 +526,7 @@ app.get('/api/profiles/:id/export/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename=receipts-${req.params.id}.pdf`);
     doc.pipe(res);
 
-    doc.fontSize(20).text('Fortress Hub - Receipt Report', { align: 'center' });
+    doc.fontSize(20).text('ReceiptVault - Receipt Report', { align: 'center' });
     doc.moveDown();
     doc.fontSize(10).text(`Generated: ${new Date().toISOString().split('T')[0]}`, { align: 'right' });
     doc.moveDown();

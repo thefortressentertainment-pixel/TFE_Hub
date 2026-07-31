@@ -1,11 +1,11 @@
 {
-  "name": "Fortress Hub",
-  "short_name": "Fortress",
+  "name": "ReceiptVault",
+  "short_name": "ReceiptVault",
   "description": "Receipt tracking & business expense manager",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#030503",
-  "theme_color": "#030503",
+  "background_color": "#f6f7f9",
+  "theme_color": "#ffffff",
   "icons": [
     {
       "src": "/icon-192.png",

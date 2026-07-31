@@ -7,7 +7,13 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Fortress Hub</string>
+        <string>ReceiptVault</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>ReceiptVault uses your location to track mileage during work shifts.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>ReceiptVault uses your location in the background to track mileage for tax purposes.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>ReceiptVault uses your location in the background to track mileage for tax purposes.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

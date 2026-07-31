@@ -771,7 +771,7 @@ export default function App() {
       {!user ? (
         <div className="auth-screen">
           <div className="auth-card">
-            <h1>Fortress Hub</h1>
+            <h1>ReceiptVault</h1>
             <div className="auth-sub">{authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
             {authError && <div className="auth-error">{authError}</div>}
             <label>Email</label>
@@ -794,7 +794,7 @@ export default function App() {
       <div className="app">
         <header className="app-header">
           <div className="brand">
-            <h1>Fortress Hub</h1>
+            <h1>ReceiptVault</h1>
           </div>
           <div className="user-chip">
             <span className="user-email">{user.email}</span>

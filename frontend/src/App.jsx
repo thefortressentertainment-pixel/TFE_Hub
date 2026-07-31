@@ -23,10 +23,16 @@ function getDeviceId() {
 }
 const DEVICE_ID = getDeviceId()
 
+function getToken() {
+  return localStorage.getItem('fortress_token') || ''
+}
+
 const origFetch = window.fetch.bind(window)
 window.fetch = (url, opts) => {
   if (typeof url === 'string' && (url.startsWith('/api/') || url.startsWith(`${API_BASE}/api/`))) {
     const headers = { ...(opts?.headers || {}), 'X-Device-Id': DEVICE_ID }
+    const token = getToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
     return origFetch(url, { ...opts, headers })
   }
   return origFetch(url, opts)
@@ -51,6 +57,14 @@ const DEDUCIBILITY_HINTS = {
 }
 
 export default function App() {
+  const [user, setUser] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('fortress_user') || 'null') } catch { return null }
+  })
+  const [authMode, setAuthMode] = useState('login')
+  const [authEmail, setAuthEmail] = useState('')
+  const [authPassword, setAuthPassword] = useState('')
+  const [authError, setAuthError] = useState('')
+  const [authLoading, setAuthLoading] = useState(false)
   const [profiles, setProfiles] = useState([])
   const [profileSummaries, setProfileSummaries] = useState([])
   const [newProfile, setNewProfile] = useState('')
@@ -93,6 +107,42 @@ export default function App() {
     const url = backendUrlInput.trim().replace(/\/+$/, '')
     localStorage.setItem('fortress_api_base', url)
     window.location.reload()
+  }
+
+  const doAuth = async (mode) => {
+    if (!authEmail || !authPassword) return setAuthError('Enter your email and password')
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword }),
+      })
+      const j = await res.json()
+      if (!res.ok) {
+        setAuthError(j.error || 'Authentication failed')
+      } else {
+        localStorage.setItem('fortress_token', j.token)
+        localStorage.setItem('fortress_user', JSON.stringify(j.user))
+        setUser(j.user)
+        setAuthEmail('')
+        setAuthPassword('')
+      }
+    } catch (e) {
+      setAuthError('Cannot reach server: ' + String(e))
+    }
+    setAuthLoading(false)
+  }
+
+  const logout = () => {
+    localStorage.removeItem('fortress_token')
+    localStorage.removeItem('fortress_user')
+    setUser(null)
+    setProfiles([])
+    setProfileSummaries([])
+    setDashboardReceipts([])
+    setSelectedProfile('')
   }
 
   const [activeShift, setActiveShift] = useState(null)
@@ -583,6 +633,35 @@ export default function App() {
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
         body { margin: 0; background: #030503; -webkit-tap-highlight-color: transparent; }
+        .auth-screen {
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+        }
+        .auth-card {
+          width: 100%;
+          max-width: 400px;
+          background: rgba(6, 12, 8, 0.95);
+          border: 2px solid #7f8f57;
+          border-radius: 16px;
+          padding: 28px;
+        }
+        .auth-card h1 { margin: 0 0 4px; color: #eaf2c7; font-size: 22px; letter-spacing: 0.14em; text-transform: uppercase; }
+        .auth-card .auth-sub { color: #8fa06d; font-size: 12px; letter-spacing: 0.1em; margin-bottom: 20px; }
+        .auth-card label { display: block; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8fa06d; margin-bottom: 6px; }
+        .auth-card input {
+          width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #57643c; background: rgba(5,10,7,0.9); color: #f4f8d9; font: inherit; margin-bottom: 14px;
+        }
+        .auth-card button {
+          width: 100%; border: 1px solid #8ca455; background: linear-gradient(180deg, #334923, #1b2815); color: #f3f8cb; padding: 10px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 14px; letter-spacing: 0.08em;
+        }
+        .auth-card button:hover { filter: brightness(1.1); }
+        .auth-card button:disabled { cursor: wait; opacity: 0.7; }
+        .auth-toggle { text-align: center; margin-top: 14px; font-size: 13px; color: #8fa06d; }
+        .auth-toggle button { width: auto; background: none; border: none; color: #a8c055; text-decoration: underline; padding: 0; font-size: 13px; }
+        .auth-error { color: #ff9f9f; font-size: 13px; margin-bottom: 12px; }
         .pipboy-app {
           min-height: 100vh;
           padding: 24px;
@@ -748,6 +827,29 @@ export default function App() {
           .pipboy-shell { padding: 8px; }
         }
       `}</style>
+      {!user ? (
+        <div className="auth-screen">
+          <div className="auth-card">
+            <h1>Fortress Hub</h1>
+            <div className="auth-sub">{authMode === 'login' ? 'Welcome back — sign in to your vault' : 'Create an account — your receipts, private to you'}</div>
+            {authError && <div className="auth-error">{authError}</div>}
+            <label>Email</label>
+            <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
+            <label>Password</label>
+            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onKeyDown={e => e.key === 'Enter' && doAuth(authMode)} />
+            <button onClick={() => doAuth(authMode)} disabled={authLoading}>
+              {authLoading ? 'Please wait...' : authMode === 'login' ? 'Sign In' : 'Create Account'}
+            </button>
+            <div className="auth-toggle">
+              {authMode === 'login' ? "New here? " : 'Already have an account? '}
+              <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>
+                {authMode === 'login' ? 'Create an account' : 'Sign in'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+      <>
       <div className="scanlines" />
       <div className="pipboy-shell">
         <div className="pipboy-title flicker">
@@ -1122,6 +1224,8 @@ export default function App() {
           </div>
         </div>
       )}
+      </>
+    )}
     </div>
   )
 }

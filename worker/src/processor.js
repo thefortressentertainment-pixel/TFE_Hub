@@ -198,12 +198,13 @@ receiptQueue.process(async (job) => {
   }
 
   const deviceId = job.data.deviceId || null;
-  const insert = `INSERT INTO receipts (user_id, s3_key, vendor, date, total, tax_amount, items, category, status, profile_id, is_business, project_name, raw_ocr_text, currency, confidence_score, device_id)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id`;
+  const ownerId = job.data.ownerId || null;
+  const insert = `INSERT INTO receipts (user_id, s3_key, vendor, date, total, tax_amount, items, category, status, profile_id, is_business, project_name, raw_ocr_text, currency, confidence_score, device_id, owner_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`;
   const values = [
-    null, filePath, vendor, date, total, taxAmount, JSON.stringify(lineItems),
+    ownerId, filePath, vendor, date, total, taxAmount, JSON.stringify(lineItems),
     category, 'processed', profileId, isBusiness !== false, projectName || null,
-    ocrText, 'USD', confidence, deviceId,
+    ocrText, 'USD', confidence, deviceId, ownerId,
   ];
 
   try {

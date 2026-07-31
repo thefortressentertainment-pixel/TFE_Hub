@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     buildCommand: ./scripts/render-build.sh
-    startCommand: node backend/src/server.js
+    startCommand: sh -c "node backend/migrations/run.js && node backend/src/server.js"
     healthCheckPath: /health
     envVars:
       - key: NODE_ENV

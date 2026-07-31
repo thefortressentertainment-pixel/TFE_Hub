@@ -5,6 +5,7 @@
   "workspaces": ["backend","worker","frontend"],
   "scripts": {
     "install:all": "npm install --workspaces",
+    "migrate": "npm --workspace backend run migrate",
     "dev": "concurrently -k \"npm run start:backend\" \"npm run start:worker\" \"npm run start:frontend\"",
     "start:backend": "npm --workspace backend start",
     "start:worker": "npm --workspace worker start",

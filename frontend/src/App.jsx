@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { io } from 'socket.io-client'
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4002'
 
@@ -10,6 +11,7 @@ export default function App() {
   const [profiles, setProfiles] = useState([])
   const [profileSummaries, setProfileSummaries] = useState([])
   const [newProfile, setNewProfile] = useState('')
+  const [newBudget, setNewBudget] = useState('')
   const [selectedProfile, setSelectedProfile] = useState('')
   const [file, setFile] = useState(null)
   const [status, setStatus] = useState('Ready to upload a receipt')
@@ -18,8 +20,34 @@ export default function App() {
   const [dashboardReceipts, setDashboardReceipts] = useState([])
   const [selectedReceipt, setSelectedReceipt] = useState(null)
   const [isUploading, setIsUploading] = useState(false)
+  const socketRef = useRef(null)
 
-  useEffect(() => { fetchProfiles(); fetchProfileSummaries(); }, [])
+  const [showMileage, setShowMileage] = useState(false)
+  const [mileageLogs, setMileageLogs] = useState([])
+  const [mileageForm, setMileageForm] = useState({ start_odometer: '', end_odometer: '', purpose: '', project_name: '' })
+
+  const [showProjects, setShowProjects] = useState(false)
+  const [projects, setProjects] = useState([])
+  const [newProjectName, setNewProjectName] = useState('')
+
+  const [showTax, setShowTax] = useState(false)
+  const [taxData, setTaxData] = useState(null)
+
+  const [showTrends, setShowTrends] = useState(false)
+  const [trends, setTrends] = useState([])
+
+  const [categories, setCategories] = useState([])
+
+  const [editReceipt, setEditReceipt] = useState(null)
+  const [editForm, setEditForm] = useState({})
+
+  const [errorMsg, setErrorMsg] = useState('')
+
+  useEffect(() => {
+    fetchProfiles()
+    fetchProfileSummaries()
+    fetchCategories()
+  }, [])
 
   useEffect(() => {
     if (!selectedProfile && profiles.length === 1) {
@@ -29,12 +57,43 @@ export default function App() {
     }
   }, [profiles, selectedProfile])
 
+  useEffect(() => {
+    const socket = io(API_BASE)
+    socketRef.current = socket
+    socket.on('connect', () => {
+      if (selectedProfile) socket.emit('subscribe:profile', selectedProfile)
+    })
+    socket.on('receipt:new', data => {
+      fetchProfileSummaries()
+      if (selectedProfile) loadReceiptsForProfile(selectedProfile)
+      setStatus(`New receipt: ${data.vendor} — ${money(data.total)}`)
+    })
+    socket.on('mileage:new', () => {
+      if (selectedProfile) fetchMileage(selectedProfile)
+    })
+    return () => socket.close()
+  }, [selectedProfile])
+
+  useEffect(() => {
+    if (socketRef.current?.connected && selectedProfile) {
+      socketRef.current.emit('subscribe:profile', selectedProfile)
+    }
+  }, [selectedProfile])
+
+  const fetchCategories = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/categories`)
+      const j = await res.json()
+      setCategories(j.categories || [])
+    } catch {}
+  }
+
   const fetchProfiles = async () => {
     try {
       const res = await fetch(`${API_BASE}/api/profiles`)
       const j = await res.json()
       setProfiles(j.profiles || [])
-    } catch (e) {}
+    } catch {}
   }
 
   const fetchProfileSummaries = async () => {
@@ -42,7 +101,7 @@ export default function App() {
       const res = await fetch(`${API_BASE}/api/profiles/summary`)
       const j = await res.json()
       setProfileSummaries(j.profiles || [])
-    } catch (e) {}
+    } catch {}
   }
 
   const selectProfile = async (profileId) => {
@@ -56,13 +115,32 @@ export default function App() {
 
   const createProfile = async () => {
     if (!newProfile) return
-    const res = await fetch(`${API_BASE}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newProfile }) })
+    const body = { name: newProfile }
+    if (newBudget) body.monthly_budget = Number(newBudget)
+    const res = await fetch(`${API_BASE}/api/profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
     const j = await res.json()
     if (j.profile) {
       setNewProfile('')
+      setNewBudget('')
       await fetchProfiles()
       await fetchProfileSummaries()
       await selectProfile(j.profile.id)
+    }
+  }
+
+  const setBudget = async (profileId, budget) => {
+    const res = await fetch(`${API_BASE}/api/profiles/${profileId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ monthly_budget: budget || null }),
+    })
+    if (res.ok) {
+      await fetchProfileSummaries()
+      await fetchProfiles()
     }
   }
 
@@ -83,13 +161,15 @@ export default function App() {
       setJobId(data.jobId)
       setShowDashboard(true)
       setStatus('Receipt uploaded. We are processing it now...')
-      if (selectedProfile) {
-        await loadReceiptsForProfile(selectedProfile)
-      }
+      if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
       pollJob(data.jobId)
     } else {
+      if (res.status === 409) {
+        setStatus('Duplicate receipt detected — this receipt already exists.')
+      } else {
+        setStatus('Upload failed: ' + (data.error || JSON.stringify(data)))
+      }
       setIsUploading(false)
-      setStatus('Upload failed: ' + (data.error || JSON.stringify(data)))
     }
   }
 
@@ -120,7 +200,7 @@ export default function App() {
             const jr = await rr.json()
             if (jr.receipt) {
               setSelectedReceipt(jr.receipt)
-              setStatus('Receipt saved for profile')
+              setStatus(`Receipt saved — ${jr.receipt.vendor} ${money(jr.receipt.total)}`)
               await fetchProfileSummaries()
               if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
             }
@@ -158,7 +238,165 @@ export default function App() {
     } catch (e) { setDashboardReceipts([]) }
   }
 
+  const exportCSV = async (pid) => {
+    window.open(`${API_BASE}/api/profiles/${pid}/export/csv`, '_blank')
+  }
+
+  const exportPDF = async (pid) => {
+    window.open(`${API_BASE}/api/profiles/${pid}/export/pdf`, '_blank')
+  }
+
+  const fetchMileage = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/mileage?profileId=${pid}`)
+      const j = await res.json()
+      setMileageLogs(j.mileage || [])
+    } catch {}
+  }
+
+  const addMileage = async () => {
+    if (!mileageForm.start_odometer && !mileageForm.end_odometer) return
+    const res = await fetch(`${API_BASE}/api/mileage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        profile_id: selectedProfile,
+        start_odometer: mileageForm.start_odometer ? Number(mileageForm.start_odometer) : null,
+        end_odometer: mileageForm.end_odometer ? Number(mileageForm.end_odometer) : null,
+        purpose: mileageForm.purpose || null,
+        project_name: mileageForm.project_name || null,
+      }),
+    })
+    if (res.ok) {
+      setMileageForm({ start_odometer: '', end_odometer: '', purpose: '', project_name: '' })
+      fetchMileage(selectedProfile)
+    }
+  }
+
+  const deleteProfile = async (id) => {
+    if (!confirm('Delete this profile and all its receipts?')) return
+    await fetch(`${API_BASE}/api/profiles/${id}`, { method: 'DELETE' })
+    if (selectedProfile === id) {
+      setSelectedProfile('')
+      setDashboardReceipts([])
+    }
+    await fetchProfiles()
+    await fetchProfileSummaries()
+  }
+
+  const deleteMileage = async (id) => {
+    await fetch(`${API_BASE}/api/mileage/${id}`, { method: 'DELETE' })
+    fetchMileage(selectedProfile)
+  }
+
+  const fetchProjects = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/projects?profileId=${pid}`)
+      const j = await res.json()
+      setProjects(j.projects || [])
+    } catch {}
+  }
+
+  const addProject = async () => {
+    if (!newProjectName) return
+    const res = await fetch(`${API_BASE}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newProjectName, profile_id: selectedProfile }),
+    })
+    if (res.ok) {
+      setNewProjectName('')
+      fetchProjects(selectedProfile)
+    }
+  }
+
+  const deleteProject = async (id) => {
+    await fetch(`${API_BASE}/api/projects/${id}`, { method: 'DELETE' })
+    fetchProjects(selectedProfile)
+  }
+
+  const fetchTaxData = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analytics/business-tax?profileId=${pid}`)
+      const j = await res.json()
+      setTaxData(j)
+    } catch {}
+  }
+
+  const fetchTrends = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analytics/spending-trends?profileId=${pid}&months=6`)
+      const j = await res.json()
+      setTrends(j.trends || [])
+    } catch {}
+  }
+
+  const openEditReceipt = (r) => {
+    setEditReceipt(r.id)
+    setEditForm({
+      vendor: r.vendor || '',
+      category: r.category || '',
+      is_business: r.is_business !== false,
+      business_notes: r.business_notes || '',
+      project_name: r.project_name || '',
+      tax_category: r.tax_category || '',
+    })
+  }
+
+  const saveEditReceipt = async () => {
+    const res = await fetch(`${API_BASE}/api/receipts/${editReceipt}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(editForm),
+    })
+    if (res.ok) {
+      setEditReceipt(null)
+      await loadReceiptsForProfile(selectedProfile)
+      await fetchProfileSummaries()
+    }
+  }
+
+  const deleteReceipt = async (id) => {
+    if (!confirm('Delete this receipt?')) return
+    const res = await fetch(`${API_BASE}/api/receipts/${id}`, { method: 'DELETE' })
+    if (res.ok) {
+      await loadReceiptsForProfile(selectedProfile)
+      await fetchProfileSummaries()
+    }
+  }
+
   const selectedSummary = profileSummaries.find(p => p.id === selectedProfile) || null
+
+  const toggleMileage = async () => {
+    const next = !showMileage
+    setShowMileage(next)
+    if (next && selectedProfile) fetchMileage(selectedProfile)
+  }
+
+  const toggleProjects = async () => {
+    const next = !showProjects
+    setShowProjects(next)
+    if (next && selectedProfile) fetchProjects(selectedProfile)
+  }
+
+  const toggleTax = async () => {
+    const next = !showTax
+    setShowTax(next)
+    if (next && selectedProfile) fetchTaxData(selectedProfile)
+  }
+
+  const toggleTrends = async () => {
+    const next = !showTrends
+    setShowTrends(next)
+    if (next && selectedProfile) fetchTrends(selectedProfile)
+  }
+
+  const trendsByMonth = trends.reduce((acc, t) => {
+    const m = t.month ? t.month.slice(0, 7) : 'unknown'
+    if (!acc[m]) acc[m] = []
+    acc[m].push(t)
+    return acc
+  }, {})
 
   return (
     <div className="pipboy-app">
@@ -225,23 +463,27 @@ export default function App() {
         .pipboy-title h1 { margin: 0; font-size: 28px; letter-spacing: 0.22em; text-transform: uppercase; color: #eaf2c7; }
         .pipboy-title p { margin: 0; color: #8fa06d; font-size: 13px; text-transform: uppercase; letter-spacing: 0.16em; }
         .vault-chip { display: inline-flex; width: fit-content; padding: 5px 9px; border: 1px solid #7f8f57; border-radius: 999px; font-size: 11px; letter-spacing: 0.2em; color: #a8c055; background: rgba(163, 190, 96, 0.08); }
-        .stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
         .stat-card, .panel-card { background: rgba(13, 24, 15, 0.9); border: 1px solid #6d7b46; border-radius: 14px; padding: 12px; box-shadow: inset 0 0 14px rgba(103, 128, 53, 0.12); }
         .stat-label { font-size: 11px; letter-spacing: 0.2em; color: #8fa06d; text-transform: uppercase; }
         .stat-value { font-size: 20px; font-weight: 700; margin-top: 4px; color: #f4f8d9; }
         .main-grid { display: grid; grid-template-columns: 1.08fr 0.92fr; gap: 16px; }
         .panel-card h2, .panel-card h3, .panel-card h4 { margin-top: 0; color: #ecf4c4; letter-spacing: 0.14em; text-transform: uppercase; font-size: 15px; }
         .panel-card label { display: block; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8fa06d; margin-bottom: 8px; }
-        .panel-card input, .panel-card select, .panel-card button { font: inherit; }
-        .panel-card input, .panel-card select {
+        .panel-card input, .panel-card select, .panel-card button, .panel-card textarea { font: inherit; }
+        .panel-card input, .panel-card select, .panel-card textarea {
           width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #57643c; background: rgba(5, 10, 7, 0.9); color: #f4f8d9;
         }
+        .panel-card textarea { resize: vertical; min-height: 50px; }
         .panel-card button {
           border: 1px solid #8ca455; background: linear-gradient(180deg, #334923, #1b2815); color: #f3f8cb; padding: 8px 12px; border-radius: 8px; cursor: pointer;
           box-shadow: inset 0 0 10px rgba(164, 196, 92, 0.16);
         }
         .panel-card button:hover { filter: brightness(1.1); }
         .panel-card button:disabled { cursor: wait; opacity: 0.75; }
+        .btn-sm { font-size: 11px; padding: 4px 8px; }
+        .btn-danger { border-color: #a14545 !important; background: linear-gradient(180deg, #492323, #281515) !important; }
+        .btn-warn { border-color: #a18a45 !important; background: linear-gradient(180deg, #493e23, #282115) !important; }
         .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: rgba(133, 159, 82, 0.16); color: #cddfae; border: 1px solid #6d7b46; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; }
         .status-box { margin-top: 12px; padding: 12px; border-radius: 10px; background: rgba(14, 32, 16, 0.95); border: 1px solid #607143; color: #dfeac4; }
         .profile-list button, .receipt-item {
@@ -251,9 +493,30 @@ export default function App() {
         .receipt-item { cursor: default; }
         .muted { color: #7b8f63; font-size: 13px; }
         .spacer { height: 8px; }
+        .flex { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .flex-between { display: flex; justify-content: space-between; align-items: center; }
+        .mb-8 { margin-bottom: 8px; }
+        .mt-8 { margin-top: 8px; }
+        .w-full { width: 100%; }
+        .budget-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); margin-top: 4px; overflow: hidden; }
+        .budget-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+        .budget-ok { background: #6d9f3f; }
+        .budget-warn { background: #c4a13a; }
+        .budget-danger { background: #b54949; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+        .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; border: 1px solid #6d7b46; font-size: 10px; background: rgba(133,159,82,0.1); }
+        .tag-green { border-color: #6d9f3f; background: rgba(109,159,63,0.15); }
+        .modal-overlay {
+          position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100;
+        }
+        .modal {
+          background: rgba(10, 20, 12, 0.98); border: 2px solid #7f8f57; border-radius: 16px; padding: 24px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+        }
+        .modal h3 { margin-top: 0; }
         @media (max-width: 900px) {
           .main-grid { grid-template-columns: 1fr; }
-          .stats-grid { grid-template-columns: 1fr; }
+          .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
       `}</style>
       <div className="scanlines" />
@@ -277,6 +540,17 @@ export default function App() {
             <div className="stat-label">Spent</div>
             <div className="stat-value">{money(profileSummaries.reduce((acc, p) => acc + Number(p.total_spent || 0), 0))}</div>
           </div>
+          <div className="stat-card">
+            <div className="stat-label">Budget Used</div>
+            <div className="stat-value">
+              {(() => {
+                const withBudget = profileSummaries.filter(p => p.monthly_budget)
+                if (!withBudget.length) return '—'
+                const avg = withBudget.reduce((a, p) => a + (p.budget_used_pct || 0), 0) / withBudget.length
+                return `${Math.round(avg)}%`
+              })()}
+            </div>
+          </div>
         </div>
 
         <div className="main-grid">
@@ -292,7 +566,10 @@ export default function App() {
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label>New profile</label>
-                <input placeholder="Vault name" value={newProfile} onChange={e => setNewProfile(e.target.value)} />
+                <div className="flex">
+                  <input placeholder="Vault name" value={newProfile} onChange={e => setNewProfile(e.target.value)} style={{ flex: 1 }} />
+                  <input placeholder="Budget" type="number" value={newBudget} onChange={e => setNewBudget(e.target.value)} style={{ width: 100 }} />
+                </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button type="button" onClick={createProfile}>Create Profile</button>
@@ -306,29 +583,135 @@ export default function App() {
             <div className="status-box">
               <strong>Status:</strong> {status}
             </div>
-            <div className="muted" style={{ marginTop: 8 }}>Uploads appear in the dashboard automatically once processing finishes.</div>
             {jobId && <div className="muted" style={{ marginTop: 8 }}>Job ID: {jobId}</div>}
             {selectedReceipt && (
               <div className="status-box" style={{ marginTop: 14 }}>
                 <h3>Latest Receipt</h3>
-                <div><strong>ID:</strong> {selectedReceipt.id}</div>
                 <div><strong>Vendor:</strong> {selectedReceipt.vendor}</div>
                 <div><strong>Date:</strong> {selectedReceipt.date}</div>
                 <div><strong>Total:</strong> {money(selectedReceipt.total)}</div>
+                {selectedReceipt.category && <div><strong>Category:</strong> <span className="tag">{selectedReceipt.category}</span></div>}
+                {selectedReceipt.confidence_score && <div><strong>Confidence:</strong> {selectedReceipt.confidence_score}%</div>}
               </div>
             )}
           </div>
 
           <div className="panel-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="flex-between mb-8">
               <h2>Dashboard</h2>
-              <button onClick={openDashboard}>{showDashboard ? 'Refresh' : 'Open Dashboard'}</button>
+              <button onClick={openDashboard}>{showDashboard ? 'Refresh' : 'Open'}</button>
             </div>
 
             {selectedSummary && (
               <div className="status-box" style={{ marginBottom: 12 }}>
-                <strong>{selectedSummary.name}</strong><br />
-                Receipts: {selectedSummary.receipt_count || 0} • Total: {money(selectedSummary.total_spent || 0)}
+                <div className="flex-between">
+                  <strong>{selectedSummary.name}</strong>
+                  {selectedSummary.monthly_budget && (
+                    <span className="tag tag-green">Budget: {money(selectedSummary.monthly_budget)}</span>
+                  )}
+                </div>
+                <div className="mt-8">
+                  Receipts: {selectedSummary.receipt_count || 0} • Total: {money(selectedSummary.total_spent || 0)}
+                </div>
+                {selectedSummary.monthly_spent !== undefined && (
+                  <div className="mt-8">
+                    <span>This month: {money(selectedSummary.monthly_spent)}</span>
+                    {selectedSummary.budget_used_pct !== null && (
+                      <>
+                        <div className="budget-bar">
+                          <div className={`budget-fill ${selectedSummary.budget_used_pct >= 90 ? 'budget-danger' : selectedSummary.budget_used_pct >= 70 ? 'budget-warn' : 'budget-ok'}`}
+                               style={{ width: `${Math.min(100, selectedSummary.budget_used_pct)}%` }} />
+                        </div>
+                        <div className="flex-between mt-8">
+                          <span className="muted">{selectedSummary.budget_used_pct}% used</span>
+                          <span className="muted">{money(selectedSummary.budget_remaining)} remaining</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+                <div className="flex mt-8">
+                  <button className="btn-sm" onClick={() => {
+                    const b = prompt('Monthly budget:', selectedSummary.monthly_budget || '')
+                    if (b !== null) setBudget(selectedProfile, b ? Number(b) : null)
+                  }}>Set Budget</button>
+                  <button className="btn-sm" onClick={() => exportCSV(selectedProfile)}>CSV</button>
+                  <button className="btn-sm" onClick={() => exportPDF(selectedProfile)}>PDF</button>
+                </div>
+              </div>
+            )}
+
+            <div className="flex mb-8" style={{ gap: 6 }}>
+              <button className="btn-sm" onClick={toggleMileage}>{showMileage ? 'Hide' : 'Mileage'}</button>
+              <button className="btn-sm" onClick={toggleProjects}>{showProjects ? 'Hide' : 'Projects'}</button>
+              <button className="btn-sm" onClick={toggleTax}>{showTax ? 'Hide' : 'Tax'}</button>
+              <button className="btn-sm" onClick={toggleTrends}>{showTrends ? 'Hide' : 'Trends'}</button>
+            </div>
+
+            {showMileage && selectedProfile && (
+              <div className="status-box" style={{ marginBottom: 12 }}>
+                <div className="flex-between"><h3>Mileage</h3></div>
+                <div className="flex mb-8">
+                  <input placeholder="Start" type="number" style={{ width: 80 }} value={mileageForm.start_odometer} onChange={e => setMileageForm(f => ({...f, start_odometer: e.target.value}))} />
+                  <input placeholder="End" type="number" style={{ width: 80 }} value={mileageForm.end_odometer} onChange={e => setMileageForm(f => ({...f, end_odometer: e.target.value}))} />
+                  <input placeholder="Purpose" style={{ flex: 1 }} value={mileageForm.purpose} onChange={e => setMileageForm(f => ({...f, purpose: e.target.value}))} />
+                  <button className="btn-sm" onClick={addMileage}>Log</button>
+                </div>
+                {mileageLogs.slice(0, 5).map(m => (
+                  <div key={m.id} className="flex-between muted" style={{ marginBottom: 4 }}>
+                    <span>{m.date} {m.miles ? `${m.miles}mi` : ''} {m.purpose ? `— ${m.purpose}` : ''}</span>
+                    <button className="btn-sm btn-danger" onClick={() => deleteMileage(m.id)}>X</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showProjects && selectedProfile && (
+              <div className="status-box" style={{ marginBottom: 12 }}>
+                <div className="flex-between"><h3>Projects</h3></div>
+                <div className="flex mb-8">
+                  <input placeholder="Project name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} style={{ flex: 1 }} />
+                  <button className="btn-sm" onClick={addProject}>Add</button>
+                </div>
+                {projects.map(p => (
+                  <div key={p.id} className="flex-between muted" style={{ marginBottom: 4 }}>
+                    <span>{p.name}</span>
+                    <button className="btn-sm btn-danger" onClick={() => deleteProject(p.id)}>X</button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {showTax && taxData && (
+              <div className="status-box" style={{ marginBottom: 12 }}>
+                <div className="flex-between"><h3>Business Tax Summary</h3></div>
+                {taxData.deductions?.map(d => (
+                  <div key={d.tax_category} className="flex-between" style={{ marginBottom: 4 }}>
+                    <span>{d.tax_category}</span>
+                    <span>{money(d.total_deduction)} ({d.count})</span>
+                  </div>
+                ))}
+                <div className="mt-8 flex-between">
+                  <strong>Total Deductions</strong>
+                  <strong>{money(taxData.grand_total)}</strong>
+                </div>
+              </div>
+            )}
+
+            {showTrends && (
+              <div className="status-box" style={{ marginBottom: 12 }}>
+                <div className="flex-between"><h3>Spending Trends</h3></div>
+                {Object.entries(trendsByMonth).slice(0, 6).map(([month, entries]) => (
+                  <div key={month} style={{ marginBottom: 8 }}>
+                    <div className="muted" style={{ marginBottom: 4 }}>{month}</div>
+                    {entries.slice(0, 4).map((e, i) => (
+                      <div key={i} className="flex-between" style={{ fontSize: 12, marginBottom: 2 }}>
+                        <span>{e.category}</span>
+                        <span>{money(e.total_spent)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
               </div>
             )}
 
@@ -338,7 +721,20 @@ export default function App() {
                 <div className="profile-list">
                   {profileSummaries.map(p => (
                     <button key={p.id} className={selectedProfile === p.id ? 'active' : ''} onClick={() => selectProfile(p.id)}>
-                      <strong>{p.name}</strong><br />
+                      <div className="flex-between">
+                        <strong>{p.name}</strong>
+                        <div className="flex" style={{ gap: 4, alignItems: 'center' }}>
+                          {p.budget_used_pct !== null && (
+                            <span className={`tag ${p.budget_used_pct >= 90 ? 'tag-green' : ''}`}>
+                              {p.budget_used_pct}%
+                            </span>
+                          )}
+                          <span className="btn-sm btn-danger" style={{ cursor: 'pointer', fontSize: 10, padding: '2px 6px' }}
+                                onClick={e => { e.stopPropagation(); deleteProfile(p.id) }}>
+                            Del
+                          </span>
+                        </div>
+                      </div>
                       <span className="muted">{p.receipt_count || 0} receipts • {money(p.total_spent || 0)}</span>
                     </button>
                   ))}
@@ -349,8 +745,21 @@ export default function App() {
                   {dashboardReceipts.length === 0 && <div className="muted">No receipts yet for this profile.</div>}
                   {dashboardReceipts.map(r => (
                     <div key={r.id} className="receipt-item">
-                      <div style={{ fontWeight: 700 }}>{r.vendor}</div>
-                      <div className="muted">{r.date} • {money(r.total)}</div>
+                      <div className="flex-between">
+                        <div style={{ fontWeight: 700 }}>{r.vendor}</div>
+                        <div className="flex" style={{ gap: 4 }}>
+                          {r.category && <span className="tag">{r.category}</span>}
+                          {r.is_business === false && <span className="tag" style={{ borderColor: '#a18a45' }}>Personal</span>}
+                          {r.project_name && <span className="tag">{r.project_name}</span>}
+                        </div>
+                      </div>
+                      <div className="flex-between muted">
+                        <span>{r.date} • {money(r.total)}</span>
+                        <div className="flex" style={{ gap: 4 }}>
+                          <button className="btn-sm" onClick={() => openEditReceipt(r)}>Edit</button>
+                          <button className="btn-sm btn-danger" onClick={() => deleteReceipt(r.id)}>Del</button>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -359,6 +768,61 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {editReceipt && (
+        <div className="modal-overlay" onClick={() => setEditReceipt(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <h3>Edit Receipt</h3>
+            <div style={{ marginBottom: 10 }}>
+              <label>Vendor</label>
+              <input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label>Category</label>
+              <select value={editForm.category} onChange={e => setEditForm(f => ({...f, category: e.target.value}))}>
+                <option value="">Uncategorized</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label>Tax Category</label>
+              <select value={editForm.tax_category} onChange={e => setEditForm(f => ({...f, tax_category: e.target.value}))}>
+                <option value="">None</option>
+                <option value="Travel">Travel</option>
+                <option value="Meals">Meals</option>
+                <option value="Supplies">Supplies</option>
+                <option value="Equipment">Equipment</option>
+                <option value="Utilities">Utilities</option>
+                <option value="Vehicle">Vehicle</option>
+                <option value="Advertising">Advertising</option>
+                <option value="Software">Software</option>
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label>Type</label>
+              <select value={editForm.is_business ? 'business' : 'personal'} onChange={e => setEditForm(f => ({...f, is_business: e.target.value === 'business'}))}>
+                <option value="business">Business</option>
+                <option value="personal">Personal</option>
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label>Project</label>
+              <select value={editForm.project_name} onChange={e => setEditForm(f => ({...f, project_name: e.target.value}))}>
+                <option value="">None</option>
+                {projects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label>Business Notes</label>
+              <textarea value={editForm.business_notes} onChange={e => setEditForm(f => ({...f, business_notes: e.target.value}))} />
+            </div>
+            <div className="flex">
+              <button onClick={saveEditReceipt}>Save</button>
+              <button className="btn-warn" onClick={() => setEditReceipt(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

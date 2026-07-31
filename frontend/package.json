@@ -1,8 +1,16 @@
 {
-  "name":"fortress-frontend",
-  "version":"0.1.0",
-  "private":true,
-  "scripts":{"start":"npx vite"},
-  "dependencies":{"react":"^18.2.0","react-dom":"^18.2.0"},
-  "devDependencies":{"vite":"^5.0.0"}
+  "name": "fortress-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "start": "npx vite"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
 }

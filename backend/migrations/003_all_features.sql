@@ -1,0 +1,38 @@
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS monthly_budget NUMERIC(15,2);
+
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'USD';
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(12,2);
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS raw_ocr_text TEXT;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS is_business BOOLEAN DEFAULT TRUE;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS tax_category VARCHAR(50);
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS business_notes TEXT;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS project_name VARCHAR(100);
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS mileage_id INTEGER;
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS confidence_score NUMERIC(5,2);
+
+CREATE TABLE IF NOT EXISTS mileage_logs (
+  id SERIAL PRIMARY KEY,
+  profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  date DATE NOT NULL DEFAULT CURRENT_DATE,
+  start_odometer INTEGER,
+  end_odometer INTEGER,
+  miles NUMERIC(8,1) GENERATED ALWAYS AS (
+    CASE WHEN end_odometer IS NOT NULL AND start_odometer IS NOT NULL
+      THEN (end_odometer - start_odometer)::NUMERIC(8,1)
+      ELSE NULL
+    END
+  ) STORED,
+  purpose TEXT,
+  project_name VARCHAR(100),
+  is_business BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  profile_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);

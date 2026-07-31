@@ -22,6 +22,15 @@ const upload = multer({ storage: multer.memoryStorage() });
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+app.use((req, res, next) => {
+  req.deviceId = req.headers['x-device-id'] || null;
+  next();
+});
+
+function deviceFilter(deviceId) {
+  return deviceId ? 'AND device_id = $1' : 'AND device_id IS NULL';
+}
+
 const pool = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/fortress' });
 const defaultUploadDir = path.resolve(__dirname, '..', 'tmp', 'uploads');
 const receiptQueue = new Queue('receipt processing', process.env.REDIS_URL || 'redis://127.0.0.1:6379', {
@@ -103,8 +112,9 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
 
     const projectName = req.body && req.body.projectName ? req.body.projectName : null;
     const isBusiness = req.body && req.body.isBusiness !== undefined ? req.body.isBusiness === 'true' || req.body.isBusiness === true : true;
+    const deviceId = req.deviceId;
 
-    const job = await receiptQueue.add({ filePath, originalName: req.file.originalname, profileId, projectName, isBusiness, fileHash });
+    const job = await receiptQueue.add({ filePath, originalName: req.file.originalname, profileId, projectName, isBusiness, fileHash, deviceId });
     res.json({ success: true, jobId: job.id, filePath, profileId });
   } catch (e) {
     console.error('Upload error', e);
@@ -141,9 +151,9 @@ app.post('/api/native-vision', async (req, res) => {
     const isBusiness = req.body && req.body.isBusiness !== undefined ? Boolean(req.body.isBusiness) : true;
     const projectName = req.body && req.body.projectName ? String(req.body.projectName) : null;
 
-    const insert = `INSERT INTO receipts (user_id, s3_key, vendor, date, total, tax_amount, items, category, status, profile_id, is_business, project_name, raw_ocr_text, currency)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`;
-    const values = [null, source, vendor, date, total, taxAmount, JSON.stringify([]), category, 'processed', profileId, isBusiness, projectName, text, 'USD'];
+    const insert = `INSERT INTO receipts (user_id, s3_key, vendor, date, total, tax_amount, items, category, status, profile_id, is_business, project_name, raw_ocr_text, currency, device_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`;
+    const values = [null, source, vendor, date, total, taxAmount, JSON.stringify([]), category, 'processed', profileId, isBusiness, projectName, text, 'USD', req.deviceId];
     const result = await pool.query(insert, values);
 
     const receiptId = result.rows[0].id;
@@ -180,6 +190,13 @@ app.get('/api/receipts', async (req, res) => {
     let sql = 'SELECT id, vendor, date, total, tax_amount, category, currency, is_business, project_name, created_at, confidence_score FROM receipts WHERE 1=1';
     const params = [];
     let idx = 1;
+
+    if (req.deviceId) {
+      sql += ` AND device_id = $${idx++}`;
+      params.push(req.deviceId);
+    } else {
+      sql += ' AND device_id IS NULL';
+    }
 
     if (query.profileId) {
       sql += ` AND profile_id = $${idx++}`;
@@ -243,7 +260,8 @@ app.patch('/api/receipts/:id', async (req, res) => {
     }
     if (!sets.length) return res.status(400).json({ error: 'No valid fields to update' });
     params.push(req.params.id);
-    const r = await pool.query(`UPDATE receipts SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, params);
+    const deviceClause = req.deviceId ? ` AND device_id = '${req.deviceId}'` : ' AND device_id IS NULL';
+    const r = await pool.query(`UPDATE receipts SET ${sets.join(', ')} WHERE id = $${idx}${deviceClause} RETURNING *`, params);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ receipt: r.rows[0] });
   } catch (e) {
@@ -254,7 +272,10 @@ app.patch('/api/receipts/:id', async (req, res) => {
 
 app.delete('/api/receipts/:id', async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM receipts WHERE id = $1 RETURNING id', [req.params.id]);
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`DELETE FROM receipts WHERE id = $1 ${deviceClause} RETURNING id`, params);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ deleted: true, id: r.rows[0].id });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -262,7 +283,9 @@ app.delete('/api/receipts/:id', async (req, res) => {
 
 app.get('/api/profiles', async (req, res) => {
   try {
-    const r = await pool.query('SELECT id, name, monthly_budget, created_at FROM profiles ORDER BY created_at DESC');
+    const deviceClause = req.deviceId ? 'WHERE device_id = $1' : 'WHERE device_id IS NULL';
+    const params = req.deviceId ? [req.deviceId] : [];
+    const r = await pool.query(`SELECT id, name, monthly_budget, created_at FROM profiles ${deviceClause} ORDER BY created_at DESC`, params);
     res.json({ profiles: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -270,7 +293,7 @@ app.get('/api/profiles', async (req, res) => {
 app.post('/api/profiles', async (req, res) => {
   try {
     const body = createProfileSchema.parse(req.body);
-    const r = await pool.query('INSERT INTO profiles (name, monthly_budget) VALUES ($1, $2) RETURNING id, name, monthly_budget', [body.name, body.monthly_budget || null]);
+    const r = await pool.query('INSERT INTO profiles (name, monthly_budget, device_id) VALUES ($1, $2, $3) RETURNING id, name, monthly_budget', [body.name, body.monthly_budget || null, req.deviceId]);
     res.json({ profile: r.rows[0] });
   } catch (e) {
     if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid profile data', details: e.errors });
@@ -281,7 +304,10 @@ app.post('/api/profiles', async (req, res) => {
 app.patch('/api/profiles/:id', async (req, res) => {
   try {
     const body = updateBudgetSchema.parse(req.body);
-    const r = await pool.query('UPDATE profiles SET monthly_budget = $1 WHERE id = $2 RETURNING id, name, monthly_budget', [body.monthly_budget, req.params.id]);
+    const deviceClause = req.deviceId ? 'AND device_id = $3' : 'AND device_id IS NULL';
+    const params = [body.monthly_budget, req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`UPDATE profiles SET monthly_budget = $1 WHERE id = $2 ${deviceClause} RETURNING id, name, monthly_budget`, params);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ profile: r.rows[0] });
   } catch (e) {
@@ -292,7 +318,10 @@ app.patch('/api/profiles/:id', async (req, res) => {
 
 app.delete('/api/profiles/:id', async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM profiles WHERE id = $1 RETURNING id', [req.params.id]);
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`DELETE FROM profiles WHERE id = $1 ${deviceClause} RETURNING id`, params);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ deleted: true, id: r.rows[0].id });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -300,6 +329,7 @@ app.delete('/api/profiles/:id', async (req, res) => {
 
 app.get('/api/profiles/summary', async (req, res) => {
   try {
+    const deviceClause = req.deviceId ? `p.device_id = '${req.deviceId}'` : 'p.device_id IS NULL';
     const r = await pool.query(`
       SELECT p.id, p.name, p.monthly_budget,
              COUNT(r.id) AS receipt_count,
@@ -307,7 +337,8 @@ app.get('/api/profiles/summary', async (req, res) => {
              COALESCE(SUM(r.total) FILTER (WHERE r.date >= date_trunc('month', CURRENT_DATE)), 0) AS monthly_spent,
              MAX(r.created_at) AS latest_receipt_at
       FROM profiles p
-      LEFT JOIN receipts r ON r.profile_id = p.id
+      LEFT JOIN receipts r ON r.profile_id = p.id AND (${deviceClause.replace('p.', 'r.')})
+      WHERE ${deviceClause}
       GROUP BY p.id, p.name, p.monthly_budget
       ORDER BY total_spent DESC, receipt_count DESC
     `);
@@ -329,9 +360,12 @@ app.get('/api/profiles/summary', async (req, res) => {
 
 app.get('/api/profiles/:id/receipts', async (req, res) => {
   try {
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(
-      'SELECT id, vendor, date, total, tax_amount, category, currency, is_business, project_name, tax_category, created_at FROM receipts WHERE profile_id = $1 ORDER BY created_at DESC',
-      [req.params.id]
+      `SELECT id, vendor, date, total, tax_amount, category, currency, is_business, project_name, tax_category, created_at FROM receipts WHERE profile_id = $1 ${deviceClause} ORDER BY created_at DESC`,
+      params
     );
     res.json({ receipts: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -340,24 +374,30 @@ app.get('/api/profiles/:id/receipts', async (req, res) => {
 app.get('/api/profiles/:id/timeseries', async (req, res) => {
   try {
     const months = parseInt(req.query.months) || 12;
+    const deviceClause = req.deviceId ? 'AND device_id = $3' : 'AND device_id IS NULL';
+    const params = [req.params.id, months];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(`
       SELECT date_trunc('month', date) AS month,
              SUM(total) AS total_spent,
              COUNT(id) AS receipt_count
       FROM receipts
-      WHERE profile_id = $1 AND date >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL
+      WHERE profile_id = $1 AND date >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL ${deviceClause}
       GROUP BY month
       ORDER BY month DESC
-    `, [req.params.id, months]);
+    `, params);
     res.json({ series: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
 app.get('/api/profiles/:id/export/csv', async (req, res) => {
   try {
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(
-      'SELECT id, vendor, date, total, tax_amount, category, is_business, project_name, business_notes, created_at FROM receipts WHERE profile_id = $1 ORDER BY date DESC',
-      [req.params.id]
+      `SELECT id, vendor, date, total, tax_amount, category, is_business, project_name, business_notes, created_at FROM receipts WHERE profile_id = $1 ${deviceClause} ORDER BY date DESC`,
+      params
     );
     if (!r.rows.length) return res.status(404).json({ error: 'No receipts found' });
     const parser = new Parser();
@@ -370,9 +410,12 @@ app.get('/api/profiles/:id/export/csv', async (req, res) => {
 
 app.get('/api/profiles/:id/export/pdf', async (req, res) => {
   try {
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(
-      'SELECT id, vendor, date, total, tax_amount, category, is_business, project_name, business_notes, created_at FROM receipts WHERE profile_id = $1 ORDER BY date DESC',
-      [req.params.id]
+      `SELECT id, vendor, date, total, tax_amount, category, is_business, project_name, business_notes, created_at FROM receipts WHERE profile_id = $1 ${deviceClause} ORDER BY date DESC`,
+      params
     );
     const profile = await pool.query('SELECT name FROM profiles WHERE id = $1', [req.params.id]);
     const profileName = profile.rows.length ? profile.rows[0].name : 'Unknown';
@@ -405,16 +448,19 @@ app.get('/api/profiles/:id/export/pdf', async (req, res) => {
 app.get('/api/analytics/business-tax', async (req, res) => {
   try {
     if (!req.query.profileId) return res.status(400).json({ error: 'profileId required' });
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.query.profileId];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(`
       SELECT
         COALESCE(tax_category, 'Uncategorized') AS tax_category,
         COUNT(id) AS count,
         SUM(total) AS total_deduction
       FROM receipts
-      WHERE is_business = true AND profile_id = $1
+      WHERE is_business = true AND profile_id = $1 ${deviceClause}
       GROUP BY tax_category
       ORDER BY total_deduction DESC
-    `, [req.query.profileId]);
+    `, params);
     const grandTotal = r.rows.reduce((acc, row) => acc + Number(row.total_deduction || 0), 0);
     res.json({ deductions: r.rows, grand_total: grandTotal });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -424,16 +470,19 @@ app.get('/api/analytics/spending-trends', async (req, res) => {
   try {
     if (!req.query.profileId) return res.status(400).json({ error: 'profileId required' });
     const months = parseInt(req.query.months) || 6;
+    const deviceClause = req.deviceId ? 'AND device_id = $3' : 'AND device_id IS NULL';
+    const params = [req.query.profileId, months];
+    if (req.deviceId) params.push(req.deviceId);
     const r = await pool.query(`
       SELECT date_trunc('month', date) AS month,
              category,
              SUM(total) AS total_spent,
              COUNT(id) AS receipt_count
       FROM receipts
-      WHERE profile_id = $1 AND date >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL
+      WHERE profile_id = $1 AND date >= date_trunc('month', CURRENT_DATE) - ($2 || ' months')::INTERVAL ${deviceClause}
       GROUP BY month, category
       ORDER BY month DESC, total_spent DESC
-    `, [req.query.profileId, months]);
+    `, params);
     res.json({ trends: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -442,7 +491,10 @@ app.get('/api/mileage', async (req, res) => {
   try {
     const profileId = req.query.profileId;
     if (!profileId) return res.status(400).json({ error: 'profileId required' });
-    const r = await pool.query('SELECT * FROM mileage_logs WHERE profile_id = $1 ORDER BY date DESC', [profileId]);
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [profileId];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`SELECT * FROM mileage_logs WHERE profile_id = $1 ${deviceClause} ORDER BY date DESC`, params);
     res.json({ mileage: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -460,9 +512,9 @@ app.post('/api/mileage', async (req, res) => {
     });
     const body = schema.parse(req.body);
     const r = await pool.query(
-      `INSERT INTO mileage_logs (profile_id, date, start_odometer, end_odometer, purpose, project_name, is_business)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-      [body.profile_id, body.date || new Date().toISOString().split('T')[0], body.start_odometer || null, body.end_odometer || null, body.purpose || null, body.project_name || null, body.is_business]
+      `INSERT INTO mileage_logs (profile_id, date, start_odometer, end_odometer, purpose, project_name, is_business, device_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [body.profile_id, body.date || new Date().toISOString().split('T')[0], body.start_odometer || null, body.end_odometer || null, body.purpose || null, body.project_name || null, body.is_business, req.deviceId]
     );
     io.to(`profile:${body.profile_id}`).emit('mileage:new', r.rows[0]);
     res.json({ mileage: r.rows[0] });
@@ -474,7 +526,10 @@ app.post('/api/mileage', async (req, res) => {
 
 app.delete('/api/mileage/:id', async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM mileage_logs WHERE id = $1 RETURNING id', [req.params.id]);
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.params.id];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`DELETE FROM mileage_logs WHERE id = $1 ${deviceClause} RETURNING id`, params);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ deleted: true, id: r.rows[0].id });
   } catch (e) { res.status(500).json({ error: String(e) }); }
@@ -484,7 +539,10 @@ app.get('/api/projects', async (req, res) => {
   try {
     const profileId = req.query.profileId;
     if (!profileId) return res.status(400).json({ error: 'profileId required' });
-    const r = await pool.query('SELECT * FROM projects WHERE profile_id = $1 ORDER BY name', [profileId]);
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [profileId];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(`SELECT * FROM projects WHERE profile_id = $1 ${deviceClause} ORDER BY name`, params);
     res.json({ projects: r.rows });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });

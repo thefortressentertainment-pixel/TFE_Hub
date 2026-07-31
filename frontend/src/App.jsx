@@ -1,7 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { io } from 'socket.io-client'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4002'
+const API_BASE = import.meta.env.VITE_API_URL || ''
+
+function getDeviceId() {
+  let id = localStorage.getItem('fortress_device_id')
+  if (!id) {
+    id = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => (c === 'x' ? Math.random() * 16 | 0 : 8 | Math.random() * 16).toString(16))
+    localStorage.setItem('fortress_device_id', id)
+  }
+  return id
+}
+const DEVICE_ID = getDeviceId()
+
+const origFetch = window.fetch.bind(window)
+window.fetch = (url, opts) => {
+  if (typeof url === 'string' && (url.startsWith('/api/') || url.startsWith(`${API_BASE}/api/`))) {
+    const headers = { ...(opts?.headers || {}), 'X-Device-Id': DEVICE_ID }
+    return origFetch(url, { ...opts, headers })
+  }
+  return origFetch(url, opts)
+}
 
 function money(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0))
@@ -58,7 +77,7 @@ export default function App() {
   }, [profiles, selectedProfile])
 
   useEffect(() => {
-    const socket = io(API_BASE)
+    const socket = io(API_BASE, { transportOptions: { polling: { extraHeaders: { 'X-Device-Id': DEVICE_ID } } } })
     socketRef.current = socket
     socket.on('connect', () => {
       if (selectedProfile) socket.emit('subscribe:profile', selectedProfile)

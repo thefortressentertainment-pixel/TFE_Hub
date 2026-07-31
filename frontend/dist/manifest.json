@@ -1,0 +1,21 @@
+{
+  "name": "Fortress Hub",
+  "short_name": "Fortress",
+  "description": "Receipt tracking & business expense manager",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030503",
+  "theme_color": "#030503",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

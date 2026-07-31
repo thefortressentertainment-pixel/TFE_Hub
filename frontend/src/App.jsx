@@ -403,7 +403,7 @@ export default function App() {
       <style>{`
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
-        body { margin: 0; background: #030503; }
+        body { margin: 0; background: #030503; -webkit-tap-highlight-color: transparent; }
         .pipboy-app {
           min-height: 100vh;
           padding: 24px;
@@ -517,6 +517,40 @@ export default function App() {
         @media (max-width: 900px) {
           .main-grid { grid-template-columns: 1fr; }
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
+          .pipboy-app { padding: 8px; }
+          .pipboy-shell { padding: 12px; border-radius: 16px; }
+          .pipboy-title h1 { font-size: 18px; letter-spacing: 0.12em; }
+          .pipboy-title p { font-size: 10px; }
+        }
+        @media (max-width: 600px) {
+          .pipboy-app { padding: 4px; }
+          .pipboy-shell { padding: 10px; border-radius: 12px; }
+          .pipboy-title h1 { font-size: 15px; }
+          .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+          .stat-card { padding: 8px; }
+          .stat-label { font-size: 9px; }
+          .stat-value { font-size: 16px; }
+          .panel-card { padding: 10px; }
+          .panel-card h2 { font-size: 13px; }
+          .panel-card input, .panel-card select, .panel-card button { font-size: 14px; padding: 10px; }
+          .profile-list button, .receipt-item { padding: 12px; }
+          .btn-sm { font-size: 10px; padding: 6px 10px; }
+          .flex { gap: 4px; }
+          .modal { padding: 16px; width: 95%; }
+        }
+        @supports (padding: env(safe-area-inset-top)) {
+          .pipboy-app { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+        }
+        @media (hover: none) and (pointer: coarse) {
+          .panel-card button, .profile-list button, .btn-sm { min-height: 44px; }
+          .panel-card input, .panel-card select, .panel-card textarea { min-height: 44px; font-size: 16px; }
+        }
+        @media (max-width: 400px) {
+          .stats-grid { grid-template-columns: 1fr 1fr; gap: 4px; }
+          .stat-value { font-size: 14px; }
+          .pipboy-title h1 { font-size: 13px; }
+          .pipboy-title p { display: none; }
+          .pipboy-shell { padding: 8px; }
         }
       `}</style>
       <div className="scanlines" />

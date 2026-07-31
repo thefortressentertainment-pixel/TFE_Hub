@@ -2,16 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { io } from 'socket.io-client'
 import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
 
-function resolveApiBase() {
-  const saved = localStorage.getItem('fortress_api_base')
-  if (saved) return saved.replace(/\/+$/, '')
-  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL.replace(/\/+$/, '')
-  if (isNative()) {
-    return 'http://localhost:4002'
-  }
-  return ''
-}
-const API_BASE = resolveApiBase()
+const API_BASE = 'https://tfe-hub.onrender.com'
 
 function getDeviceId() {
   let id = localStorage.getItem('fortress_device_id')
@@ -102,7 +93,6 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState('')
 
   const [showSettings, setShowSettings] = useState(false)
-  const [backendUrlInput, setBackendUrlInput] = useState(API_BASE)
   const [theme, setTheme] = useState(() => localStorage.getItem('fortress_theme') || 'light')
 
   const toggleTheme = () => {
@@ -111,12 +101,6 @@ export default function App() {
       localStorage.setItem('fortress_theme', next)
       return next
     })
-  }
-
-  const saveBackendUrl = () => {
-    const url = backendUrlInput.trim().replace(/\/+$/, '')
-    localStorage.setItem('fortress_api_base', url)
-    window.location.reload()
   }
 
   const doAuth = async (mode) => {
@@ -958,22 +942,6 @@ export default function App() {
                   <span style={{ fontSize: 13 }}>{theme === 'dark' ? 'Dark' : 'Light'}</span>
                   <div className="toggle-track" data-on={theme === 'dark'}><div className="toggle-thumb" /></div>
                 </div>
-              </div>
-              <div className="flex-between" style={{ marginBottom: 8 }}>
-                <strong>Backend URL</strong>
-                <span className="muted">hosted web page</span>
-              </div>
-              <div className="flex" style={{ gap: 6 }}>
-                <input
-                  placeholder="https://your-app.trycloudflare.com"
-                  value={backendUrlInput}
-                  onChange={e => setBackendUrlInput(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn-sm" onClick={saveBackendUrl}>Save</button>
-              </div>
-              <div className="muted" style={{ marginTop: 6 }}>
-                Current: {API_BASE || '(same origin)'}
               </div>
             </div>
           )}

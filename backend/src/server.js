@@ -187,6 +187,82 @@ app.get('/api/auth/me', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+const crypto = require('crypto');
+
+async function sendResetEmail(to, resetLink) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM || 'ReceiptVault <no-reply@receiptvault.app>';
+  if (!apiKey) return false;
+  try {
+    const body = JSON.stringify({
+      from,
+      to: [to],
+      subject: 'ReceiptVault — Reset your password',
+      html: `<p>We received a request to reset your ReceiptVault password.</p>
+<p><a href="${resetLink}">Reset your password</a></p>
+<p>If you didn't request this, you can safely ignore this email. This link expires in 1 hour.</p>`,
+      text: `Reset your ReceiptVault password: ${resetLink}. This link expires in 1 hour. If you didn't request this, ignore this email.`,
+    });
+    const req = http.request({
+      hostname: 'api.resend.com',
+      path: '/emails',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    });
+    req.on('error', () => {});
+    req.write(body);
+    req.end();
+    return true;
+  } catch (e) { return false; }
+}
+
+app.post('/api/auth/forgot', async (req, res) => {
+  try {
+    const email = z.string().email().parse((req.body || {}).email || '').toLowerCase();
+    const user = await pool.query('SELECT id, email FROM users WHERE email = $1', [email]);
+    if (!user.rows.length) {
+      return res.json({ success: true, message: 'If that email exists, a reset link has been sent.' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    await pool.query(
+      `INSERT INTO password_resets (user_id, token_hash, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+      [user.rows[0].id, tokenHash]
+    );
+    const resetLink = `${process.env.APP_URL || 'https://tfe-hub.onrender.com'}/reset?token=${token}`;
+    const sent = await sendResetEmail(user.rows[0].email, resetLink);
+    if (!sent) {
+      console.log('RESET LINK (email not configured):', resetLink);
+    }
+    res.json({ success: true, message: 'If that email exists, a reset link has been sent.', devLink: sent ? undefined : resetLink });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ error: 'Enter a valid email' });
+    console.error('Forgot error', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/auth/reset', async (req, res) => {
+  try {
+    const body = z.object({ token: z.string().min(20), password: z.string().min(8).max(200) }).parse(req.body);
+    const tokenHash = crypto.createHash('sha256').update(body.token).digest('hex');
+    const r = await pool.query(
+      `SELECT pr.id, pr.user_id FROM password_resets pr
+       WHERE pr.token_hash = $1 AND pr.used = FALSE AND pr.expires_at > NOW() LIMIT 1`,
+      [tokenHash]
+    );
+    if (!r.rows.length) return res.status(400).json({ error: 'This reset link is invalid or has expired.' });
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, r.rows[0].user_id]);
+    await pool.query('UPDATE password_resets SET used = TRUE WHERE id = $1', [r.rows[0].id]);
+    res.json({ success: true, message: 'Password updated. You can now sign in.' });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid reset request' });
+    console.error('Reset error', e);
+    res.status(500).json({ error: String(e) });
+  }
+});
+
 app.post('/api/upload', upload.single('receipt'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });

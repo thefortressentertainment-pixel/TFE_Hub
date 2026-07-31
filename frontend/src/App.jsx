@@ -65,6 +65,7 @@ export default function App() {
   const [authPassword, setAuthPassword] = useState('')
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
   const [profiles, setProfiles] = useState([])
   const [profileSummaries, setProfileSummaries] = useState([])
   const [newProfile, setNewProfile] = useState('')
@@ -128,6 +129,53 @@ export default function App() {
         setUser(j.user)
         setAuthEmail('')
         setAuthPassword('')
+      }
+    } catch (e) {
+      setAuthError('Cannot reach server: ' + String(e))
+    }
+    setAuthLoading(false)
+  }
+
+  const doForgot = async () => {
+    if (!authEmail) return setAuthError('Enter your email')
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/forgot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail }),
+      })
+      const j = await res.json()
+      if (res.ok && j.success) {
+        setAuthError('If that email exists, a reset link has been sent.')
+      } else {
+        setAuthError(j.error || 'Could not send reset link')
+      }
+    } catch (e) {
+      setAuthError('Cannot reach server: ' + String(e))
+    }
+    setAuthLoading(false)
+  }
+
+  const doReset = async () => {
+    if (!authPassword || authPassword.length < 8) return setAuthError('Password must be at least 8 characters')
+    setAuthLoading(true)
+    setAuthError('')
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: resetToken, password: authPassword }),
+      })
+      const j = await res.json()
+      if (res.ok && j.success) {
+        setAuthError('Password updated. You can now sign in.')
+        setResetToken('')
+        setAuthMode('login')
+        setAuthPassword('')
+      } else {
+        setAuthError(j.error || 'Reset failed. The link may be invalid or expired.')
       }
     } catch (e) {
       setAuthError('Cannot reach server: ' + String(e))
@@ -772,21 +820,46 @@ export default function App() {
         <div className="auth-screen">
           <div className="auth-card">
             <h1>ReceiptVault</h1>
-            <div className="auth-sub">{authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
+            <div className="auth-sub">{resetToken ? 'Set a new password' : authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
             {authError && <div className="auth-error">{authError}</div>}
             <label>Email</label>
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
             <label>Password</label>
-            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onKeyDown={e => e.key === 'Enter' && doAuth(authMode)} />
-            <button onClick={() => doAuth(authMode)} disabled={authLoading}>
-              {authLoading ? 'Please wait...' : authMode === 'login' ? 'Sign In' : 'Create Account'}
-            </button>
-            <div className="auth-toggle">
-              {authMode === 'login' ? "New here? " : 'Already have an account? '}
-              <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>
-                {authMode === 'login' ? 'Create an account' : 'Sign in'}
+            <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onKeyDown={e => e.key === 'Enter' && (resetToken ? doReset() : doAuth(authMode))} />
+            {resetToken ? (
+              <button onClick={doReset} disabled={authLoading}>
+                {authLoading ? 'Please wait...' : 'Reset Password'}
               </button>
-            </div>
+            ) : (
+              <button onClick={() => doAuth(authMode)} disabled={authLoading}>
+                {authLoading ? 'Please wait...' : authMode === 'login' ? 'Sign In' : 'Create Account'}
+              </button>
+            )}
+            {authMode === 'login' && (
+              <div className="auth-toggle">
+                <button onClick={() => setAuthMode('forgot')}>Forgot your password?</button>
+              </div>
+            )}
+            {authMode === 'forgot' ? (
+              <div style={{ marginTop: 4 }}>
+                <label>Email</label>
+                <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
+                <button onClick={doForgot} disabled={authLoading}>
+                  {authLoading ? 'Please wait...' : 'Send Reset Link'}
+                </button>
+                {authError && <div className="auth-error">{authError}</div>}
+                <div className="auth-toggle">
+                  <button onClick={() => { setAuthMode('login'); setAuthError('') }}>Back to sign in</button>
+                </div>
+              </div>
+            ) : (
+              <div className="auth-toggle">
+                {authMode === 'login' ? "New here? " : 'Already have an account? '}
+                <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthError('') }}>
+                  {authMode === 'login' ? 'Create an account' : 'Sign in'}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       ) : (

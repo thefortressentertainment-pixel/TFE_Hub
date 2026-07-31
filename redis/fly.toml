@@ -1,0 +1,15 @@
+app = "fortress-redis"
+
+[build]
+  image = "redis:7-alpine"
+
+[env]
+  SAVE = '""'
+
+[mounts]
+  source = "redisdata"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

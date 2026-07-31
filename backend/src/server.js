@@ -80,8 +80,18 @@ const receiptQuerySchema = z.object({
   project: z.string().optional(),
 });
 
+const distDir = path.resolve(__dirname, '..', '..', 'frontend', 'dist');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+}
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
-app.get('/', (req, res) => res.json({ app: 'Fortress Hub backend', status: 'ok' }));
+app.get('/', (req, res) => {
+  if (fs.existsSync(path.join(distDir, 'index.html'))) {
+    return res.sendFile(path.join(distDir, 'index.html'));
+  }
+  res.json({ app: 'Fortress Hub backend', status: 'ok' });
+});
 
 app.post('/api/upload', upload.single('receipt'), async (req, res) => {
   try {

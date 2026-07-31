@@ -1,0 +1,50 @@
+app = "tfe-hub"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[processes]
+  web = "node src/server.js"
+  worker = "node ../worker/src/processor.js"
+
+[env]
+  PORT = "4002"
+  NODE_ENV = "production"
+
+[experimental]
+  allowed_public_ports = []
+  auto_rollback = true
+
+[[services]]
+  protocol = "tcp"
+  internal_port = 4002
+  processes = ["web"]
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 1000
+    soft_limit = 1000
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["http", "tls"]
+
+  [[services.ports]]
+    port = 4002
+    handlers = ["http", "tls"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  processes = ["web"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+  processes = ["worker"]

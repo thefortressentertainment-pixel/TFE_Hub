@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "start": "npx vite"
+    "start": "npx vite",
+    "build": "npx vite build"
   },
   "dependencies": {
     "@capacitor-community/background-geolocation": "^1.2.26",

@@ -506,7 +506,6 @@ app.get('/api/profiles/:id/export/pdf', async (req, res) => {
     doc.pipe(res);
 
     doc.fontSize(20).text('Fortress Hub - Receipt Report', { align: 'center' });
-    doc.fontSize(14).text(`Profile: ${profileName}`, { align: 'center' });
     doc.moveDown();
     doc.fontSize(10).text(`Generated: ${new Date().toISOString().split('T')[0]}`, { align: 'right' });
     doc.moveDown();

@@ -628,210 +628,151 @@ export default function App() {
   }, {})
 
   return (
-    <div className="pipboy-app">
+    <div className="app">
       <style>{`
-        :root { color-scheme: dark; }
+        :root { color-scheme: light; }
         * { box-sizing: border-box; }
-        body { margin: 0; background: #030503; -webkit-tap-highlight-color: transparent; }
+        body { margin: 0; background: #f6f7f9; -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
         .auth-screen {
           min-height: 100vh;
           display: flex;
           align-items: center;
           justify-content: center;
           padding: 20px;
+          background: linear-gradient(160deg, #eef2f7 0%, #f6f7f9 100%);
         }
         .auth-card {
           width: 100%;
           max-width: 400px;
-          background: rgba(6, 12, 8, 0.95);
-          border: 2px solid #7f8f57;
+          background: #ffffff;
+          border: 1px solid #e3e6ea;
           border-radius: 16px;
-          padding: 28px;
+          padding: 32px;
+          box-shadow: 0 8px 30px rgba(0,0,0,0.08);
         }
-        .auth-card h1 { margin: 0 0 4px; color: #eaf2c7; font-size: 22px; letter-spacing: 0.14em; text-transform: uppercase; }
-        .auth-card .auth-sub { color: #8fa06d; font-size: 12px; letter-spacing: 0.1em; margin-bottom: 20px; }
-        .auth-card label { display: block; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8fa06d; margin-bottom: 6px; }
+        .auth-card h1 { margin: 0 0 4px; color: #101828; font-size: 24px; font-weight: 700; }
+        .auth-card .auth-sub { color: #667085; font-size: 14px; margin-bottom: 24px; }
+        .auth-card label { display: block; font-size: 13px; font-weight: 600; color: #344054; margin-bottom: 6px; }
         .auth-card input {
-          width: 100%; padding: 10px; border-radius: 8px; border: 1px solid #57643c; background: rgba(5,10,7,0.9); color: #f4f8d9; font: inherit; margin-bottom: 14px;
+          width: 100%; padding: 11px 12px; border-radius: 8px; border: 1px solid #d0d5dd; background: #ffffff; color: #101828; font: inherit; margin-bottom: 16px;
         }
+        .auth-card input:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
         .auth-card button {
-          width: 100%; border: 1px solid #8ca455; background: linear-gradient(180deg, #334923, #1b2815); color: #f3f8cb; padding: 10px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 14px; letter-spacing: 0.08em;
+          width: 100%; border: none; background: #3b82f6; color: #ffffff; padding: 11px; border-radius: 8px; cursor: pointer; font: inherit; font-size: 15px; font-weight: 600;
         }
-        .auth-card button:hover { filter: brightness(1.1); }
+        .auth-card button:hover { background: #2563eb; }
         .auth-card button:disabled { cursor: wait; opacity: 0.7; }
-        .auth-toggle { text-align: center; margin-top: 14px; font-size: 13px; color: #8fa06d; }
-        .auth-toggle button { width: auto; background: none; border: none; color: #a8c055; text-decoration: underline; padding: 0; font-size: 13px; }
-        .auth-error { color: #ff9f9f; font-size: 13px; margin-bottom: 12px; }
-        .pipboy-app {
+        .auth-toggle { text-align: center; margin-top: 16px; font-size: 14px; color: #667085; }
+        .auth-toggle button { width: auto; background: none; border: none; color: #3b82f6; text-decoration: underline; padding: 0; font-size: 14px; }
+        .auth-error { color: #dc2626; font-size: 14px; margin-bottom: 12px; }
+        .app {
           min-height: 100vh;
-          padding: 24px;
-          background: radial-gradient(circle at top, #183423 0%, #07120a 45%, #020402 100%);
-          color: #dfe8c8;
-          font-family: 'Courier New', Consolas, monospace;
-          position: relative;
-          overflow: hidden;
+          background: #f6f7f9;
+          color: #101828;
         }
-        .pipboy-app::before {
-          content: '';
-          position: fixed;
-          inset: 0;
-          background-image: linear-gradient(transparent 0%, rgba(255,255,255,0.03) 50%, transparent 100%);
-          background-size: 100% 4px;
-          pointer-events: none;
-          opacity: 0.2;
+        .app-header {
+          background: #ffffff;
+          border-bottom: 1px solid #e3e6ea;
+          padding: 14px 20px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
         }
-        .pipboy-shell {
-          max-width: 1200px;
-          margin: 0 auto;
-          padding: 24px;
-          border: 2px solid #7f8f57;
-          border-radius: 24px;
-          background: rgba(6, 12, 8, 0.95);
-          box-shadow: 0 0 0 1px rgba(148, 182, 96, 0.25), 0 0 45px rgba(0, 0, 0, 0.45), inset 0 0 28px rgba(88, 119, 49, 0.16);
-          position: relative;
-          overflow: hidden;
-        }
-        .pipboy-shell::before {
-          content: '';
-          position: absolute;
-          inset: 0;
-          background: linear-gradient(135deg, rgba(255,255,255,0.04), transparent 42%, rgba(129, 164, 81, 0.06));
-          pointer-events: none;
-        }
-        .scanlines {
-          position: absolute;
-          inset: 0;
-          background: repeating-linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.03) 1px, transparent 1px, transparent 3px);
-          mix-blend-mode: screen;
-          opacity: 0.16;
-          pointer-events: none;
-          animation: scan 4s linear infinite;
-        }
-        .flicker { animation: flicker 3.4s infinite; }
-        @keyframes flicker {
-          0%, 18%, 22%, 25%, 53%, 57%, 100% { opacity: 1; }
-          20%, 24%, 55% { opacity: 0.95; }
-          19%, 21%, 56% { opacity: 0.92; }
-        }
-        @keyframes scan {
-          from { transform: translateY(-100%); }
-          to { transform: translateY(100%); }
-        }
-        .pipboy-title { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
-        .pipboy-title h1 { margin: 0; font-size: 28px; letter-spacing: 0.22em; text-transform: uppercase; color: #eaf2c7; }
-        .pipboy-title p { margin: 0; color: #8fa06d; font-size: 13px; text-transform: uppercase; letter-spacing: 0.16em; }
-        .vault-chip { display: inline-flex; width: fit-content; padding: 5px 9px; border: 1px solid #7f8f57; border-radius: 999px; font-size: 11px; letter-spacing: 0.2em; color: #a8c055; background: rgba(163, 190, 96, 0.08); }
-        .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 16px; }
-        .stat-card, .panel-card { background: rgba(13, 24, 15, 0.9); border: 1px solid #6d7b46; border-radius: 14px; padding: 12px; box-shadow: inset 0 0 14px rgba(103, 128, 53, 0.12); }
-        .stat-label { font-size: 11px; letter-spacing: 0.2em; color: #8fa06d; text-transform: uppercase; }
-        .stat-value { font-size: 20px; font-weight: 700; margin-top: 4px; color: #f4f8d9; }
-        .main-grid { display: grid; grid-template-columns: 1.08fr 0.92fr; gap: 16px; }
-        .panel-card h2, .panel-card h3, .panel-card h4 { margin-top: 0; color: #ecf4c4; letter-spacing: 0.14em; text-transform: uppercase; font-size: 15px; }
-        .panel-card label { display: block; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; color: #8fa06d; margin-bottom: 8px; }
-        .panel-card input, .panel-card select, .panel-card button, .panel-card textarea { font: inherit; }
+        .app-header .brand { display: flex; align-items: center; gap: 10px; }
+        .app-header h1 { margin: 0; font-size: 19px; font-weight: 700; color: #101828; }
+        .app-header .user-chip { display: flex; align-items: center; gap: 8px; }
+        .app-header .user-email { font-size: 13px; color: #667085; }
+        .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+        .stat-card, .panel-card { background: #ffffff; border: 1px solid #e3e6ea; border-radius: 12px; padding: 14px; }
+        .stat-label { font-size: 12px; color: #667085; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+        .stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; color: #101828; }
+        .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .panel-card h2, .panel-card h3, .panel-card h4 { margin-top: 0; color: #101828; font-size: 15px; font-weight: 700; }
+        .panel-card label { display: block; font-size: 12px; font-weight: 600; color: #344054; margin-bottom: 6px; }
+        .panel-card input, .panel-card select, .panel-card button, .panel-card textarea { font: inherit; font-size: 14px; }
         .panel-card input, .panel-card select, .panel-card textarea {
-          width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #57643c; background: rgba(5, 10, 7, 0.9); color: #f4f8d9;
+          width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid #d0d5dd; background: #ffffff; color: #101828;
         }
+        .panel-card input:focus, .panel-card select:focus, .panel-card textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
         .panel-card textarea { resize: vertical; min-height: 50px; }
         .panel-card button {
-          border: 1px solid #8ca455; background: linear-gradient(180deg, #334923, #1b2815); color: #f3f8cb; padding: 8px 12px; border-radius: 8px; cursor: pointer;
-          box-shadow: inset 0 0 10px rgba(164, 196, 92, 0.16);
+          border: 1px solid #d0d5dd; background: #ffffff; color: #344054; padding: 9px 14px; border-radius: 8px; cursor: pointer;
         }
-        .panel-card button:hover { filter: brightness(1.1); }
-        .panel-card button:disabled { cursor: wait; opacity: 0.75; }
-        .btn-sm { font-size: 11px; padding: 4px 8px; }
-        .btn-danger { border-color: #a14545 !important; background: linear-gradient(180deg, #492323, #281515) !important; }
-        .btn-warn { border-color: #a18a45 !important; background: linear-gradient(180deg, #493e23, #282115) !important; }
-        .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: rgba(133, 159, 82, 0.16); color: #cddfae; border: 1px solid #6d7b46; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; }
-        .status-box { margin-top: 12px; padding: 12px; border-radius: 10px; background: rgba(14, 32, 16, 0.95); border: 1px solid #607143; color: #dfeac4; }
+        .panel-card button:hover { background: #f2f4f7; }
+        .panel-card button:disabled { cursor: wait; opacity: 0.7; }
+        .btn-primary { border: none !important; background: #3b82f6 !important; color: #ffffff !important; font-weight: 600; }
+        .btn-primary:hover { background: #2563eb !important; }
+        .btn-sm { font-size: 12px; padding: 5px 9px; }
+        .btn-danger { border-color: #fecaca !important; color: #dc2626 !important; }
+        .btn-danger:hover { background: #fef2f2 !important; }
+        .btn-warn { border-color: #fed7aa !important; color: #c2410c !important; }
+        .btn-warn:hover { background: #fff7ed !important; }
+        .status-box { margin-top: 12px; padding: 12px; border-radius: 10px; background: #f0f6ff; border: 1px solid #bfdbfe; color: #1e3a8a; }
         .shift-panel {
-          background: rgba(13, 24, 15, 0.9); border: 1px solid #6d7b46; border-radius: 14px; padding: 14px;
-          box-shadow: inset 0 0 14px rgba(103, 128, 53, 0.12);
+          background: #ffffff; border: 1px solid #e3e6ea; border-radius: 12px; padding: 16px;
         }
         .shift-start {
-          border: 1px solid #4d8a4a; background: linear-gradient(180deg, #2f5a2a, #1a3a17); color: #d9ffd1;
-          padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em;
-          box-shadow: inset 0 0 12px rgba(109, 200, 80, 0.2);
+          border: none; background: #16a34a; color: #ffffff; padding: 11px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 600;
         }
-        .shift-start:hover { filter: brightness(1.15); }
+        .shift-start:hover { background: #15803d; }
         .shift-end {
-          border: 1px solid #a14545; background: linear-gradient(180deg, #5a2a2a, #3a1717); color: #ffd1d1;
-          padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em;
-          box-shadow: inset 0 0 12px rgba(200, 80, 80, 0.2);
+          border: none; background: #dc2626; color: #ffffff; padding: 11px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 600;
         }
-        .shift-end:hover { filter: brightness(1.15); }
+        .shift-end:hover { background: #b91c1c; }
         .profile-list button, .receipt-item {
-          width: 100%; text-align: left; border: 1px solid #596b3f; background: rgba(10, 20, 12, 0.82); border-radius: 10px; padding: 10px; cursor: pointer; color: #eef4cb; margin-bottom: 8px;
+          width: 100%; text-align: left; border: 1px solid #e3e6ea; background: #ffffff; border-radius: 10px; padding: 12px; cursor: pointer; color: #101828; margin-bottom: 8px;
         }
-        .profile-list button.active { border-color: #b8e64b; box-shadow: inset 0 0 10px rgba(184, 230, 75, 0.15); }
+        .profile-list button:hover { border-color: #3b82f6; }
+        .profile-list button.active { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
         .receipt-item { cursor: default; }
-        .muted { color: #7b8f63; font-size: 13px; }
-        .spacer { height: 8px; }
+        .muted { color: #667085; font-size: 13px; }
         .flex { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
         .flex-between { display: flex; justify-content: space-between; align-items: center; }
         .mb-8 { margin-bottom: 8px; }
         .mt-8 { margin-top: 8px; }
-        .w-full { width: 100%; }
-        .budget-bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,0.08); margin-top: 4px; overflow: hidden; }
+        .budget-bar { height: 8px; border-radius: 4px; background: #e5e7eb; margin-top: 4px; overflow: hidden; }
         .budget-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
-        .budget-ok { background: #6d9f3f; }
-        .budget-warn { background: #c4a13a; }
-        .budget-danger { background: #b54949; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-        .tag { display: inline-block; padding: 2px 6px; border-radius: 4px; border: 1px solid #6d7b46; font-size: 10px; background: rgba(133,159,82,0.1); }
-        .tag-green { border-color: #6d9f3f; background: rgba(109,159,63,0.15); }
+        .budget-ok { background: #16a34a; }
+        .budget-warn { background: #f59e0b; }
+        .budget-danger { background: #dc2626; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid #d0d5dd; font-size: 11px; background: #f2f4f7; color: #344054; }
+        .tag-green { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
         .modal-overlay {
-          position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 100;
+          position: fixed; inset: 0; background: rgba(16,24,40,0.5); display: flex; align-items: center; justify-content: center; z-index: 100;
         }
         .modal {
-          background: rgba(10, 20, 12, 0.98); border: 2px solid #7f8f57; border-radius: 16px; padding: 24px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto;
+          background: #ffffff; border: 1px solid #e3e6ea; border-radius: 16px; padding: 24px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: 0 20px 40px rgba(0,0,0,0.15);
         }
         .modal h3 { margin-top: 0; }
         @media (max-width: 900px) {
           .main-grid { grid-template-columns: 1fr; }
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
-          .pipboy-app { padding: 8px; }
-          .pipboy-shell { padding: 12px; border-radius: 16px; }
-          .pipboy-title h1 { font-size: 18px; letter-spacing: 0.12em; }
-          .pipboy-title p { font-size: 10px; }
+          .container { padding: 12px; }
         }
         @media (max-width: 600px) {
-          .pipboy-app { padding: 4px; }
-          .pipboy-shell { padding: 10px; border-radius: 12px; }
-          .pipboy-title h1 { font-size: 15px; }
-          .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
-          .stat-card { padding: 8px; }
-          .stat-label { font-size: 9px; }
-          .stat-value { font-size: 16px; }
-          .panel-card { padding: 10px; }
-          .panel-card h2 { font-size: 13px; }
-          .panel-card input, .panel-card select, .panel-card button { font-size: 14px; padding: 10px; }
+          .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+          .stat-card { padding: 10px; }
+          .stat-value { font-size: 18px; }
+          .panel-card { padding: 12px; }
+          .panel-card input, .panel-card select, .panel-card button { font-size: 15px; padding: 10px; }
           .profile-list button, .receipt-item { padding: 12px; }
-          .btn-sm { font-size: 10px; padding: 6px 10px; }
-          .flex { gap: 4px; }
-          .modal { padding: 16px; width: 95%; }
-        }
-        @supports (padding: env(safe-area-inset-top)) {
-          .pipboy-app { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+          .app-header { padding: 12px 14px; }
+          .app-header h1 { font-size: 17px; }
+          .modal { padding: 18px; width: 95%; }
         }
         @media (hover: none) and (pointer: coarse) {
           .panel-card button, .profile-list button, .btn-sm { min-height: 44px; }
           .panel-card input, .panel-card select, .panel-card textarea { min-height: 44px; font-size: 16px; }
-        }
-        @media (max-width: 400px) {
-          .stats-grid { grid-template-columns: 1fr 1fr; gap: 4px; }
-          .stat-value { font-size: 14px; }
-          .pipboy-title h1 { font-size: 13px; }
-          .pipboy-title p { display: none; }
-          .pipboy-shell { padding: 8px; }
         }
       `}</style>
       {!user ? (
         <div className="auth-screen">
           <div className="auth-card">
             <h1>Fortress Hub</h1>
-            <div className="auth-sub">{authMode === 'login' ? 'Welcome back — sign in to your vault' : 'Create an account — your receipts, private to you'}</div>
+            <div className="auth-sub">{authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
             {authError && <div className="auth-error">{authError}</div>}
             <label>Email</label>
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
@@ -850,19 +791,22 @@ export default function App() {
         </div>
       ) : (
       <>
-      <div className="scanlines" />
-      <div className="pipboy-shell">
-        <div className="pipboy-title flicker">
-          <div className="flex-between" style={{ width: '100%' }}>
-            <span className="vault-chip">Vault-Tec / Interface</span>
+      <div className="app">
+        <header className="app-header">
+          <div className="brand">
+            <h1>Fortress Hub</h1>
+          </div>
+          <div className="user-chip">
+            <span className="user-email">{user.email}</span>
             <button className="btn-sm" onClick={() => setShowSettings(!showSettings)}>
               {showSettings ? 'Close' : 'Settings'}
             </button>
+            <button className="btn-sm" onClick={logout}>Sign Out</button>
           </div>
-          <h1>Fortress Hub // Pip-Boy Link</h1>
-          <p>Receipt routing stable. Vault profile sync active.</p>
+        </header>
+        <div className="container">
           {showSettings && (
-            <div className="status-box" style={{ marginTop: 4 }}>
+            <div className="panel-card" style={{ marginBottom: 16 }}>
               <div className="flex-between" style={{ marginBottom: 8 }}>
                 <strong>Backend URL</strong>
                 <span className="muted">hosted web page</span>
@@ -872,7 +816,7 @@ export default function App() {
                   placeholder="https://your-app.trycloudflare.com"
                   value={backendUrlInput}
                   onChange={e => setBackendUrlInput(e.target.value)}
-                  style={{ flex: 1, padding: '8px 10px', borderRadius: 8, border: '1px solid #57643c', background: 'rgba(5,10,7,0.9)', color: '#f4f8d9', font: 'inherit', fontSize: 13 }}
+                  style={{ flex: 1 }}
                 />
                 <button className="btn-sm" onClick={saveBackendUrl}>Save</button>
               </div>
@@ -881,7 +825,6 @@ export default function App() {
               </div>
             </div>
           )}
-        </div>
 
         <div className="stats-grid">
           <div className="stat-card">
@@ -911,7 +854,7 @@ export default function App() {
 
         <div className="shift-panel" style={{ marginBottom: 16 }}>
           <div className="flex-between" style={{ marginBottom: 10 }}>
-            <h2 style={{ margin: 0, color: '#ecf4c4', letterSpacing: '0.14em', textTransform: 'uppercase', fontSize: 15 }}>Shift Tracker</h2>
+            <h2 style={{ margin: 0, fontSize: 15 }}>Shift Tracker</h2>
             {dailySummary && !activeShift && (
               <span className="muted">Today: {money(dailySummary.spend)} • {dailySummary.miles} mi</span>
             )}
@@ -923,7 +866,7 @@ export default function App() {
                 placeholder="Shift purpose (e.g. DoorDash lunch rush)"
                 value={shiftPurpose}
                 onChange={e => setShiftPurpose(e.target.value)}
-                style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid #57643c', background: 'rgba(5,10,7,0.9)', color: '#f4f8d9', font: 'inherit', fontSize: 14 }}
+                style={{ flex: 1 }}
               />
               <button onClick={startShift} className="shift-start" style={{ whiteSpace: 'nowrap' }}>▶ Start Shift</button>
             </div>
@@ -974,7 +917,7 @@ export default function App() {
               </div>
               <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
                 <button type="button" onClick={createProfile}>Create Profile</button>
-                <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 10px', borderRadius: 8, border: '1px solid #57643c', background: 'rgba(5, 10, 7, 0.9)', cursor: 'pointer', color: '#f4f8d9' }}>
+                <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '9px 11px', borderRadius: 8, border: '1px solid #d0d5dd', background: '#ffffff', cursor: 'pointer', color: '#344054' }}>
                   <span>{file ? file.name : 'Choose file'}</span>
                   <input type="file" accept="image/*,.pdf" onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
                 </label>
@@ -1168,6 +1111,7 @@ export default function App() {
             )}
           </div>
         </div>
+      </div>
       </div>
 
       {editReceipt && (

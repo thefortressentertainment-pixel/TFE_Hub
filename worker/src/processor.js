@@ -252,4 +252,11 @@ receiptQueue.on('completed', (job, result) => {
 });
 receiptQueue.on('failed', (job, err) => console.error('Job failed', job.id, err));
 
+const healthServer = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', role: 'worker' }));
+});
+const healthPort = process.env.PORT || 10000;
+healthServer.listen(healthPort, () => console.log(`Worker health server on ${healthPort}`));
+
 console.log('Worker started');

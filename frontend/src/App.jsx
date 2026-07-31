@@ -26,6 +26,31 @@ function money(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0))
 }
 
+function haversineMiles(a, b) {
+  if (!a || !b) return 0
+  const R = 3958.8
+  const dLat = ((b.lat - a.lat) * Math.PI) / 180
+  const dLon = ((b.lng - a.lng) * Math.PI) / 180
+  const lat1 = (a.lat * Math.PI) / 180
+  const lat2 = (b.lat * Math.PI) / 180
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(h))
+}
+
+const DEDUCIBILITY_HINTS = {
+  'Fuel': { pct: 100, hint: 'Fully deductible as business fuel. Tag to your shift or job.' },
+  'Vehicle': { pct: 100, hint: 'Maintenance/repair deductible if the vehicle is used for work. Log odometer.' },
+  'Food & Drink': { pct: 50, hint: 'Meals often 50% deductible — write the business purpose (e.g. "meeting with client").' },
+  'Food Delivery': { pct: 100, hint: 'Business meal — tag who/what it was for.' },
+  'Transport': { pct: 100, hint: 'Uber/parking/tolls deductible as business travel.' },
+  'Travel': { pct: 100, hint: 'Hotel/travel deductible for business trips. Keep the dates.' },
+  'Utilities': { pct: 100, hint: 'Phone/internet — a % may be deductible if used for work.' },
+  'Medical': { pct: 0, hint: 'Not a business deduction unless directly work-related.' },
+  'Groceries': { pct: 0, hint: 'Personal unless it is a business supply. Usually not deductible.' },
+  'Shopping': { pct: 0, hint: 'Deductible only if it is equipment/tools for your work.' },
+  'Subscriptions': { pct: 50, hint: 'Software/tools used for work may be 50-100% deductible.' },
+}
+
 export default function App() {
   const [profiles, setProfiles] = useState([])
   const [profileSummaries, setProfileSummaries] = useState([])
@@ -62,11 +87,78 @@ export default function App() {
 
   const [errorMsg, setErrorMsg] = useState('')
 
+  const [activeShift, setActiveShift] = useState(null)
+  const [shiftElapsed, setShiftElapsed] = useState(0)
+  const [shiftMiles, setShiftMiles] = useState(0)
+  const [shiftPurpose, setShiftPurpose] = useState('')
+  const watchRef = useRef(null)
+  const lastPosRef = useRef(null)
+  const elapsedIntervalRef = useRef(null)
+  const [dailySummary, setDailySummary] = useState(null)
+  const [recentShifts, setRecentShifts] = useState([])
+
   useEffect(() => {
     fetchProfiles()
     fetchProfileSummaries()
     fetchCategories()
   }, [])
+
+  useEffect(() => {
+    if (selectedProfile) fetchDailySummary(selectedProfile)
+  }, [selectedProfile])
+
+  useEffect(() => {
+    if (selectedProfile) {
+      const res = fetch(`${API_BASE}/api/shifts/current?profileId=${selectedProfile}`)
+      res.then(r => r.json()).then(j => {
+        if (j.shift) {
+          setActiveShift(j.shift)
+          setShiftElapsed(Math.floor((Date.now() - new Date(j.shift.start_time).getTime()) / 1000))
+        }
+      }).catch(() => {})
+    }
+  }, [selectedProfile])
+
+  useEffect(() => {
+    if (selectedProfile) {
+      fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
+        .then(r => r.json())
+        .then(j => setRecentShifts(j.shifts || []))
+        .catch(() => {})
+    }
+  }, [selectedProfile])
+
+  useEffect(() => {
+    if (activeShift) {
+      elapsedIntervalRef.current = setInterval(() => {
+        setShiftElapsed(Math.floor((Date.now() - new Date(activeShift.start_time).getTime()) / 1000))
+      }, 1000)
+    } else {
+      clearInterval(elapsedIntervalRef.current)
+    }
+    return () => clearInterval(elapsedIntervalRef.current)
+  }, [activeShift])
+
+  useEffect(() => {
+    if (activeShift && navigator.geolocation && !watchRef.current) {
+      watchRef.current = navigator.geolocation.watchPosition(
+        pos => {
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+          if (lastPosRef.current) {
+            setShiftMiles(prev => prev + haversineMiles(lastPosRef.current, coords))
+          }
+          lastPosRef.current = coords
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
+      )
+    } else if (!activeShift && watchRef.current) {
+      navigator.geolocation.clearWatch(watchRef.current)
+      watchRef.current = null
+      lastPosRef.current = null
+      setShiftMiles(0)
+    }
+  }, [activeShift])
 
   useEffect(() => {
     if (!selectedProfile && profiles.length === 1) {
@@ -161,6 +253,75 @@ export default function App() {
       await fetchProfileSummaries()
       await fetchProfiles()
     }
+  }
+
+  const fetchDailySummary = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/daily-summary?profileId=${pid}`)
+      const j = await res.json()
+      setDailySummary(j.today || null)
+    } catch {}
+  }
+
+  const startShift = async () => {
+    if (!selectedProfile) return setStatus('Choose a profile first')
+    if (!navigator.geolocation) return setStatus('GPS not available on this device')
+    setStatus('Requesting GPS permission...')
+    try {
+      await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 }))
+    } catch (e) {
+      setStatus('GPS permission denied — cannot auto-track miles. You can still log mileage manually.')
+      return
+    }
+    setStatus('Starting shift...')
+    const res = await fetch(`${API_BASE}/api/shifts/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ profile_id: selectedProfile, purpose: shiftPurpose || 'DoorDash shift' }),
+    })
+    const j = await res.json()
+    if (j.shift) {
+      setActiveShift(j.shift)
+      setShiftElapsed(0)
+      setShiftMiles(0)
+      lastPosRef.current = null
+      setStatus(`Shift started — ${j.shift.purpose || 'work shift'}`)
+      const r = await fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
+      const rs = await r.json()
+      setRecentShifts(rs.shifts || [])
+    } else {
+      setStatus('Could not start shift')
+    }
+  }
+
+  const endShift = async () => {
+    if (!activeShift) return
+    setStatus(`Ending shift — ${shiftMiles.toFixed(1)} mi tracked. Saving...`)
+    const res = await fetch(`${API_BASE}/api/shifts/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ shift_id: activeShift.id, miles: Math.round(shiftMiles * 10) / 10 }),
+    })
+    const j = await res.json()
+    if (j.shift) {
+      setStatus(`Shift ended — ${Number(j.shift.miles || 0).toFixed(1)} mi logged for the day.`)
+      setActiveShift(null)
+      setShiftElapsed(0)
+      setShiftMiles(0)
+      await fetchDailySummary(selectedProfile)
+      const r = await fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
+      const rs = await r.json()
+      setRecentShifts(rs.shifts || [])
+    } else {
+      setStatus('Could not end shift')
+    }
+  }
+
+  const formatElapsed = (sec) => {
+    const h = Math.floor(sec / 3600)
+    const m = Math.floor((sec % 3600) / 60)
+    const s = sec % 60
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   }
 
   const uploadReceipt = async (event) => {
@@ -505,6 +666,22 @@ export default function App() {
         .btn-warn { border-color: #a18a45 !important; background: linear-gradient(180deg, #493e23, #282115) !important; }
         .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: rgba(133, 159, 82, 0.16); color: #cddfae; border: 1px solid #6d7b46; font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase; }
         .status-box { margin-top: 12px; padding: 12px; border-radius: 10px; background: rgba(14, 32, 16, 0.95); border: 1px solid #607143; color: #dfeac4; }
+        .shift-panel {
+          background: rgba(13, 24, 15, 0.9); border: 1px solid #6d7b46; border-radius: 14px; padding: 14px;
+          box-shadow: inset 0 0 14px rgba(103, 128, 53, 0.12);
+        }
+        .shift-start {
+          border: 1px solid #4d8a4a; background: linear-gradient(180deg, #2f5a2a, #1a3a17); color: #d9ffd1;
+          padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em;
+          box-shadow: inset 0 0 12px rgba(109, 200, 80, 0.2);
+        }
+        .shift-start:hover { filter: brightness(1.15); }
+        .shift-end {
+          border: 1px solid #a14545; background: linear-gradient(180deg, #5a2a2a, #3a1717); color: #ffd1d1;
+          padding: 10px 18px; border-radius: 8px; cursor: pointer; font-size: 15px; font-weight: 700; letter-spacing: 0.08em;
+          box-shadow: inset 0 0 12px rgba(200, 80, 80, 0.2);
+        }
+        .shift-end:hover { filter: brightness(1.15); }
         .profile-list button, .receipt-item {
           width: 100%; text-align: left; border: 1px solid #596b3f; background: rgba(10, 20, 12, 0.82); border-radius: 10px; padding: 10px; cursor: pointer; color: #eef4cb; margin-bottom: 8px;
         }
@@ -604,6 +781,51 @@ export default function App() {
               })()}
             </div>
           </div>
+        </div>
+
+        <div className="shift-panel" style={{ marginBottom: 16 }}>
+          <div className="flex-between" style={{ marginBottom: 10 }}>
+            <h2 style={{ margin: 0, color: '#ecf4c4', letterSpacing: '0.14em', textTransform: 'uppercase', fontSize: 15 }}>Shift Tracker</h2>
+            {dailySummary && !activeShift && (
+              <span className="muted">Today: {money(dailySummary.spend)} • {dailySummary.miles} mi</span>
+            )}
+          </div>
+
+          {!activeShift ? (
+            <div className="flex" style={{ gap: 8, alignItems: 'stretch' }}>
+              <input
+                placeholder="Shift purpose (e.g. DoorDash lunch rush)"
+                value={shiftPurpose}
+                onChange={e => setShiftPurpose(e.target.value)}
+                style={{ flex: 1, padding: '10px 12px', borderRadius: 8, border: '1px solid #57643c', background: 'rgba(5,10,7,0.9)', color: '#f4f8d9', font: 'inherit', fontSize: 14 }}
+              />
+              <button onClick={startShift} className="shift-start" style={{ whiteSpace: 'nowrap' }}>▶ Start Shift</button>
+            </div>
+          ) : (
+            <div>
+              <div className="flex" style={{ gap: 16, marginBottom: 10 }}>
+                <div className="stat-card" style={{ flex: 1 }}>
+                  <div className="stat-label">Elapsed</div>
+                  <div className="stat-value" style={{ fontSize: 22 }}>{formatElapsed(shiftElapsed)}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1 }}>
+                  <div className="stat-label">Miles (GPS)</div>
+                  <div className="stat-value" style={{ fontSize: 22 }}>{shiftMiles.toFixed(1)}</div>
+                </div>
+                <div className="stat-card" style={{ flex: 1 }}>
+                  <div className="stat-label">Est. Deduction</div>
+                  <div className="stat-value" style={{ fontSize: 22 }}>{money(shiftMiles * 0.67)}</div>
+                </div>
+              </div>
+              <button onClick={endShift} className="shift-end" style={{ width: '100%', whiteSpace: 'nowrap' }}>■ End Shift & Log Miles</button>
+            </div>
+          )}
+
+          {recentShifts.length > 0 && !activeShift && (
+            <div className="muted" style={{ marginTop: 8 }}>
+              Last: {recentShifts.slice(0, 3).map(s => `${s.purpose || 'shift'} (${Number(s.miles || 0).toFixed(1)}mi)`).join(' • ')}
+            </div>
+          )}
         </div>
 
         <div className="main-grid">

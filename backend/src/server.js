@@ -535,6 +535,117 @@ app.delete('/api/mileage/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+app.post('/api/shifts/start', async (req, res) => {
+  try {
+    const schema = z.object({
+      profile_id: z.string().uuid(),
+      purpose: z.string().max(100).optional(),
+    });
+    const body = schema.parse(req.body);
+
+    const active = await pool.query(
+      `SELECT id, start_time FROM shifts WHERE profile_id = $1 AND status = 'active' AND (device_id = $2 OR device_id IS NULL) LIMIT 1`,
+      [body.profile_id, req.deviceId]
+    );
+    if (active.rows.length) {
+      return res.json({ shift: active.rows[0], already_active: true });
+    }
+
+    const r = await pool.query(
+      `INSERT INTO shifts (profile_id, device_id, purpose) VALUES ($1, $2, $3) RETURNING *`,
+      [body.profile_id, req.deviceId, body.purpose || null]
+    );
+    res.json({ shift: r.rows[0] });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid data', details: e.errors });
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.post('/api/shifts/end', async (req, res) => {
+  try {
+    const schema = z.object({
+      shift_id: z.number().int(),
+      miles: z.number().min(0).nullable().optional(),
+    });
+    const body = schema.parse(req.body);
+    const deviceClause = req.deviceId ? 'AND device_id = $4' : 'AND device_id IS NULL';
+    const params = [body.shift_id, new Date(), body.miles ?? null];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(
+      `UPDATE shifts SET end_time = $2, status = 'completed', miles = COALESCE($3, miles)
+       WHERE id = $1 AND status = 'active' ${deviceClause} RETURNING *`,
+      params
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'No active shift found' });
+    io.to(`profile:${r.rows[0].profile_id}`).emit('shift:end', r.rows[0]);
+    res.json({ shift: r.rows[0] });
+  } catch (e) {
+    if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid data', details: e.errors });
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/shifts/current', async (req, res) => {
+  try {
+    if (!req.query.profileId) return res.status(400).json({ error: 'profileId required' });
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.query.profileId];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(
+      `SELECT * FROM shifts WHERE profile_id = $1 AND status = 'active' ${deviceClause} ORDER BY start_time DESC LIMIT 1`,
+      params
+    );
+    res.json({ shift: r.rows[0] || null });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/shifts', async (req, res) => {
+  try {
+    if (!req.query.profileId) return res.status(400).json({ error: 'profileId required' });
+    const deviceClause = req.deviceId ? 'AND device_id = $2' : 'AND device_id IS NULL';
+    const params = [req.query.profileId];
+    if (req.deviceId) params.push(req.deviceId);
+    const r = await pool.query(
+      `SELECT id, purpose, start_time, end_time, miles, status FROM shifts
+       WHERE profile_id = $1 ${deviceClause} ORDER BY start_time DESC LIMIT 30`,
+      params
+    );
+    res.json({ shifts: r.rows });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/daily-summary', async (req, res) => {
+  try {
+    if (!req.query.profileId) return res.status(400).json({ error: 'profileId required' });
+
+    const today = await pool.query(
+      `SELECT
+         COALESCE(SUM(r.total), 0) AS spend,
+         COUNT(r.id) AS receipts,
+         COALESCE(SUM(r.total) FILTER (WHERE r.is_business), 0) AS business_spend
+       FROM receipts r
+       WHERE r.profile_id = $1 AND r.date = CURRENT_DATE ${req.deviceId ? 'AND r.device_id = $2' : 'AND r.device_id IS NULL'}`,
+      req.deviceId ? [req.query.profileId, req.deviceId] : [req.query.profileId]
+    );
+    const miles = await pool.query(
+      `SELECT COALESCE(SUM(s.miles), 0) AS miles, COUNT(*) AS shifts
+       FROM shifts s WHERE s.profile_id = $1 AND s.status = 'completed' AND s.end_time >= date_trunc('day', CURRENT_DATE) ${req.deviceId ? 'AND s.device_id = $2' : 'AND s.device_id IS NULL'}`,
+      req.deviceId ? [req.query.profileId, req.deviceId] : [req.query.profileId]
+    );
+
+    res.json({
+      today: {
+        spend: Number(today.rows[0].spend),
+        business_spend: Number(today.rows[0].business_spend),
+        receipts: Number(today.rows[0].receipts),
+        miles: Number(miles.rows[0].miles),
+        shifts: Number(miles.rows[0].shifts),
+      },
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 app.get('/api/projects', async (req, res) => {
   try {
     const profileId = req.query.profileId;

@@ -1,0 +1,19 @@
+{
+  "appId": "com.fortresshub.app",
+  "appName": "Fortress Hub",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "backgroundColor": "#030503"
+  },
+  "plugins": {
+    "BackgroundGeolocation": {
+      "backgroundMessage": "Fortress Hub is tracking your shift miles",
+      "backgroundTitle": "Shift in progress"
+    }
+  }
+}

@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { io } from 'socket.io-client'
+import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
+function resolveApiBase() {
+  if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL
+  if (isNative()) {
+    return 'http://localhost:4002'
+  }
+  return ''
+}
+const API_BASE = resolveApiBase()
 
 function getDeviceId() {
   let id = localStorage.getItem('fortress_device_id')
@@ -24,17 +32,6 @@ window.fetch = (url, opts) => {
 
 function money(value) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0))
-}
-
-function haversineMiles(a, b) {
-  if (!a || !b) return 0
-  const R = 3958.8
-  const dLat = ((b.lat - a.lat) * Math.PI) / 180
-  const dLon = ((b.lng - a.lng) * Math.PI) / 180
-  const lat1 = (a.lat * Math.PI) / 180
-  const lat2 = (b.lat * Math.PI) / 180
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2
-  return 2 * R * Math.asin(Math.sqrt(h))
 }
 
 const DEDUCIBILITY_HINTS = {
@@ -91,8 +88,6 @@ export default function App() {
   const [shiftElapsed, setShiftElapsed] = useState(0)
   const [shiftMiles, setShiftMiles] = useState(0)
   const [shiftPurpose, setShiftPurpose] = useState('')
-  const watchRef = useRef(null)
-  const lastPosRef = useRef(null)
   const elapsedIntervalRef = useRef(null)
   const [dailySummary, setDailySummary] = useState(null)
   const [recentShifts, setRecentShifts] = useState([])
@@ -140,22 +135,10 @@ export default function App() {
   }, [activeShift])
 
   useEffect(() => {
-    if (activeShift && navigator.geolocation && !watchRef.current) {
-      watchRef.current = navigator.geolocation.watchPosition(
-        pos => {
-          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
-          if (lastPosRef.current) {
-            setShiftMiles(prev => prev + haversineMiles(lastPosRef.current, coords))
-          }
-          lastPosRef.current = coords
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
-      )
-    } else if (!activeShift && watchRef.current) {
-      navigator.geolocation.clearWatch(watchRef.current)
-      watchRef.current = null
-      lastPosRef.current = null
+    if (activeShift) {
+      startTracking(({ miles }) => setShiftMiles(miles), () => {})
+    } else {
+      stopTracking()
       setShiftMiles(0)
     }
   }, [activeShift])
@@ -265,11 +248,9 @@ export default function App() {
 
   const startShift = async () => {
     if (!selectedProfile) return setStatus('Choose a profile first')
-    if (!navigator.geolocation) return setStatus('GPS not available on this device')
     setStatus('Requesting GPS permission...')
-    try {
-      await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 }))
-    } catch (e) {
+    const granted = await requestPermission()
+    if (!granted) {
       setStatus('GPS permission denied — cannot auto-track miles. You can still log mileage manually.')
       return
     }
@@ -284,8 +265,7 @@ export default function App() {
       setActiveShift(j.shift)
       setShiftElapsed(0)
       setShiftMiles(0)
-      lastPosRef.current = null
-      setStatus(`Shift started — ${j.shift.purpose || 'work shift'}`)
+      setStatus(`Shift started — ${j.shift.purpose || 'work shift'}` + (isNative() ? ' (tracking in background)' : ''))
       const r = await fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
       const rs = await r.json()
       setRecentShifts(rs.shifts || [])

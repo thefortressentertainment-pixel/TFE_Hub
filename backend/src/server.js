@@ -477,9 +477,24 @@ app.get('/api/receipts', async (req, res) => {
 
 app.get('/api/receipts/:id', async (req, res) => {
   try {
-    const r = await pool.query('SELECT * FROM receipts WHERE id = $1', [req.params.id]);
+    const tenant = tenantFilter(req, '', 2);
+    const r = await pool.query(`SELECT * FROM receipts WHERE id = $1${tenant.sql}`, [req.params.id, ...tenant.params]);
     if (!r.rows.length) return res.status(404).json({ error: 'not found' });
     res.json({ receipt: r.rows[0] });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/receipts/:id/image', async (req, res) => {
+  try {
+    const tenant = tenantFilter(req, '', 2);
+    const r = await pool.query(`SELECT s3_key FROM receipts WHERE id = $1${tenant.sql}`, [req.params.id, ...tenant.params]);
+    if (!r.rows.length) return res.status(404).json({ error: 'not found' });
+    const filePath = r.rows[0].s3_key;
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'image not available' });
+    }
+    res.setHeader('Content-Disposition', `inline; filename="receipt-${req.params.id}"`);
+    res.sendFile(path.resolve(filePath));
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -638,6 +653,32 @@ app.get('/api/profiles/:id/export/csv', async (req, res) => {
     const csv = parser.parse(r.rows);
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename=receipts-${req.params.id}.csv`);
+    res.send(csv);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.get('/api/profiles/:id/export/tax', async (req, res) => {
+  try {
+    const tenant = tenantFilter(req, '', 2);
+    const r = await pool.query(
+      `SELECT id, vendor, date, total, tax_amount, category, tax_category, is_business, project_name, business_notes FROM receipts WHERE profile_id = $1${tenant.sql} ORDER BY date DESC`,
+      [req.params.id, ...tenant.params]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'No receipts found' });
+    const rows = r.rows.map(row => ({
+      Date: row.date,
+      Payee: row.vendor,
+      Description: row.business_notes || row.project_name || row.category || '',
+      Amount: Number(row.total || 0).toFixed(2),
+      'Tax Amount': row.tax_amount != null ? Number(row.tax_amount).toFixed(2) : '',
+      Category: row.tax_category || row.category || 'Uncategorized',
+      'Deductible': row.is_business !== false ? 'Yes' : 'No',
+      'Tax Form': 'Schedule C',
+    }));
+    const parser = new Parser({ header: true });
+    const csv = parser.parse(rows);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=receiptvault-tax-export.csv`);
     res.send(csv);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });

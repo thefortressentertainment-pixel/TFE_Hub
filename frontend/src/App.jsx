@@ -98,6 +98,8 @@ export default function App() {
 
   const [editReceipt, setEditReceipt] = useState(null)
   const [editForm, setEditForm] = useState({})
+  const [searchQuery, setSearchQuery] = useState('')
+  const [viewReceiptImage, setViewReceiptImage] = useState(null)
 
   const [errorMsg, setErrorMsg] = useState('')
 
@@ -570,6 +572,10 @@ export default function App() {
 
   const exportPDF = async (pid) => {
     window.open(`${API_BASE}/api/profiles/${pid}/export/pdf`, '_blank')
+  }
+
+  const exportTax = async (pid) => {
+    window.open(`${API_BASE}/api/profiles/${pid}/export/tax`, '_blank')
   }
 
   const fetchMileage = async (pid) => {
@@ -1186,6 +1192,7 @@ export default function App() {
                     const b = prompt('Monthly budget:', selectedSummary.monthly_budget || '')
                     if (b !== null) setBudget(selectedProfile, b ? Number(b) : null)
                   }}>Set Budget</button>
+                  <button className="btn-sm btn-primary" onClick={() => exportTax(selectedProfile)}>Tax Export</button>
                   <button className="btn-sm" onClick={() => exportCSV(selectedProfile)}>CSV</button>
                   <button className="btn-sm" onClick={() => exportPDF(selectedProfile)}>PDF</button>
                 </div>
@@ -1292,12 +1299,23 @@ export default function App() {
                 </div>
 
                 <h4 style={{ marginTop: 16 }}>Receipts for Selected Profile</h4>
+                <div style={{ marginBottom: 10 }}>
+                  <input
+                    placeholder="Search receipts (vendor, category, notes)..."
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                  />
+                </div>
                 <div>
                   {dashboardReceipts.length === 0 && <div className="muted">No receipts yet for this profile.</div>}
-                  {dashboardReceipts.map(r => {
+                  {dashboardReceipts.filter(r => {
+                    const q = searchQuery.toLowerCase()
+                    if (!q) return true
+                    return [r.vendor, r.category, r.project_name, r.date].some(f => f && String(f).toLowerCase().includes(q))
+                  }).map(r => {
                     const dmeta = deductibleMeta(r)
                     return (
-                    <div key={r.id} className="receipt-item">
+                    <div key={r.id} className="receipt-item" style={{ cursor: 'pointer' }} onClick={() => setViewReceiptImage(r)}>
                       <div className="flex-between">
                         <div style={{ fontWeight: 700 }}>{r.vendor}</div>
                         <div className="flex" style={{ gap: 4 }}>
@@ -1308,7 +1326,7 @@ export default function App() {
                       </div>
                       <div className="flex-between muted">
                         <span>{r.date} • {money(r.total)}</span>
-                        <div className="flex" style={{ gap: 4 }}>
+                        <div className="flex" style={{ gap: 4 }} onClick={e => e.stopPropagation()}>
                           <button className="btn-sm" onClick={() => openEditReceipt(r)}>Edit</button>
                           <button className="btn-sm btn-danger" onClick={() => deleteReceipt(r.id)}>Del</button>
                         </div>
@@ -1374,6 +1392,27 @@ export default function App() {
               <button onClick={saveEditReceipt}>Save</button>
               <button className="btn-warn" onClick={() => setEditReceipt(null)}>Cancel</button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {viewReceiptImage && (
+        <div className="modal-overlay" onClick={() => setViewReceiptImage(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div className="flex-between" style={{ marginBottom: 12 }}>
+              <h3>{viewReceiptImage.vendor}</h3>
+              <button className="btn-sm" onClick={() => setViewReceiptImage(null)}>Close</button>
+            </div>
+            <div className="muted" style={{ marginBottom: 12 }}>
+              {viewReceiptImage.date} • {money(viewReceiptImage.total)}
+            </div>
+            <img
+              src={`${API_BASE}/api/receipts/${viewReceiptImage.id}/image`}
+              alt="Receipt"
+              style={{ width: '100%', maxHeight: '60vh', objectFit: 'contain', borderRadius: 8, background: '#fff' }}
+              onError={e => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'block') }}
+            />
+            <div className="muted" style={{ display: 'none', textAlign: 'center', padding: 20 }}>Receipt image not available.</div>
           </div>
         </div>
       )}

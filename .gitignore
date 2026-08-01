@@ -11,3 +11,4 @@ yarn-error.log*
 coverage/
 logs/
 *.log
+eng.traineddata

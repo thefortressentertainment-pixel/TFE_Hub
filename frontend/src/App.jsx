@@ -47,6 +47,15 @@ const DEDUCIBILITY_HINTS = {
   'Subscriptions': { pct: 50, hint: 'Software/tools used for work may be 50-100% deductible.' },
 }
 
+function deductibleMeta(receipt) {
+  const isPersonal = receipt.is_business === false
+  if (isPersonal) return { cls: 'tag-personal', label: 'Personal', hint: 'Marked personal — not deductible.' }
+  const info = DEDUCIBILITY_HINTS[receipt.category] || DEDUCIBILITY_HINTS[receipt.tax_category]
+  if (info && info.pct === 100) return { cls: 'tag-deductible', label: 'Deductible', hint: info.hint }
+  if (info && info.pct > 0) return { cls: 'tag-partial', label: `${info.pct}%`, hint: info.hint }
+  return { cls: 'tag-personal', label: 'Review', hint: 'Check deductibility — may not qualify.' }
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('fortress_user') || 'null') } catch { return null }
@@ -193,6 +202,9 @@ export default function App() {
   const elapsedIntervalRef = useRef(null)
   const [dailySummary, setDailySummary] = useState(null)
   const [recentShifts, setRecentShifts] = useState([])
+  const [lastShiftSummary, setLastShiftSummary] = useState(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const recognitionRef = useRef(null)
 
   useEffect(() => {
     fetchProfiles()
@@ -387,6 +399,12 @@ export default function App() {
     const j = await res.json()
     if (j.shift) {
       setStatus(`Shift ended — ${Number(j.shift.miles || 0).toFixed(1)} mi logged for the day.`)
+      const summary = {
+        purpose: j.shift.purpose || 'Work shift',
+        miles: Number(j.shift.miles || 0),
+        deduction: Number(j.shift.miles || 0) * 0.67,
+      }
+      setLastShiftSummary(summary)
       setActiveShift(null)
       setShiftElapsed(0)
       setShiftMiles(0)
@@ -397,6 +415,44 @@ export default function App() {
     } else {
       setStatus('Could not end shift')
     }
+  }
+
+  const shareShiftSummary = () => {
+    if (!lastShiftSummary) return
+    const text = `ReceiptVault — ${lastShiftSummary.purpose}\nMiles: ${lastShiftSummary.miles.toFixed(1)}\nEst. tax deduction: ${money(lastShiftSummary.deduction)}`
+    if (navigator.share) {
+      navigator.share({ title: 'ReceiptVault Shift', text }).catch(() => {})
+    } else if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).then(() => setStatus('Shift summary copied to clipboard'))
+    } else {
+      setStatus(text)
+    }
+  }
+
+  const toggleVoiceNote = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) {
+      setStatus('Voice notes not supported on this browser')
+      return
+    }
+    if (isRecording) {
+      recognitionRef.current && recognitionRef.current.stop()
+      setIsRecording(false)
+      return
+    }
+    const rec = new SR()
+    rec.lang = 'en-US'
+    rec.interimResults = false
+    recognitionRef.current = rec
+    rec.onresult = (e) => {
+      const text = e.results[0][0].transcript
+      setShiftPurpose(prev => prev ? prev + ' ' + text : text)
+      setIsRecording(false)
+    }
+    rec.onend = () => setIsRecording(false)
+    rec.onerror = () => setIsRecording(false)
+    rec.start()
+    setIsRecording(true)
   }
 
   const formatElapsed = (sec) => {
@@ -836,6 +892,18 @@ export default function App() {
         .budget-danger { background: var(--danger); }
         .tag { display: inline-block; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-strong); font-size: 11px; background: var(--surface-2); color: var(--text-2); }
         .tag-green { border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); color: var(--success); }
+        .tag-deductible { border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.12); color: var(--success); font-weight: 600; }
+        .tag-partial { border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.12); color: var(--warn); font-weight: 600; }
+        .tag-personal { border-color: rgba(148,163,184,0.5); background: rgba(148,163,184,0.12); color: var(--text-2); font-weight: 600; }
+        .share-card {
+          margin-top: 12px; padding: 14px; border-radius: 12px; background: var(--accent-soft); border: 1px solid var(--accent-border);
+        }
+        .share-card .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 14px; }
+        .share-card .row .k { color: var(--text-3); }
+        .share-card .row .v { font-weight: 700; }
+        .mic-btn { cursor: pointer; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); border-radius: 9px; padding: 8px 12px; font-size: 14px; }
+        .mic-btn.recording { border-color: var(--danger); color: var(--danger); animation: pulse 1.2s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
         .modal-overlay {
           position: fixed; inset: 0; background: rgba(16,24,40,0.5); display: flex; align-items: center; justify-content: center; z-index: 100;
         }
@@ -986,14 +1054,28 @@ export default function App() {
           </div>
 
           {!activeShift ? (
-            <div className="flex" style={{ gap: 8, alignItems: 'stretch' }}>
-              <input
-                placeholder="Shift purpose (e.g. DoorDash lunch rush)"
-                value={shiftPurpose}
-                onChange={e => setShiftPurpose(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button onClick={startShift} className="shift-start" style={{ whiteSpace: 'nowrap' }}>▶ Start Shift</button>
+            <div>
+              <div className="flex" style={{ gap: 8, alignItems: 'stretch' }}>
+                <input
+                  placeholder="Shift purpose (e.g. DoorDash lunch rush)"
+                  value={shiftPurpose}
+                  onChange={e => setShiftPurpose(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button onClick={toggleVoiceNote} className={`mic-btn ${isRecording ? 'recording' : ''}`} title="Speak the shift purpose">
+                  {isRecording ? '● Listening…' : '🎤'}
+                </button>
+                <button onClick={startShift} className="shift-start" style={{ whiteSpace: 'nowrap' }}>▶ Start Shift</button>
+              </div>
+              {lastShiftSummary && !activeShift && (
+                <div className="share-card">
+                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Last shift logged</div>
+                  <div className="row"><span className="k">Purpose</span><span className="v">{lastShiftSummary.purpose}</span></div>
+                  <div className="row"><span className="k">Miles</span><span className="v">{lastShiftSummary.miles.toFixed(1)} mi</span></div>
+                  <div className="row"><span className="k">Est. deduction</span><span className="v">{money(lastShiftSummary.deduction)}</span></div>
+                  <button className="btn-sm btn-primary" style={{ marginTop: 10, width: '100%' }} onClick={shareShiftSummary}>Share Summary</button>
+                </div>
+              )}
             </div>
           ) : (
             <div>
@@ -1212,13 +1294,15 @@ export default function App() {
                 <h4 style={{ marginTop: 16 }}>Receipts for Selected Profile</h4>
                 <div>
                   {dashboardReceipts.length === 0 && <div className="muted">No receipts yet for this profile.</div>}
-                  {dashboardReceipts.map(r => (
+                  {dashboardReceipts.map(r => {
+                    const dmeta = deductibleMeta(r)
+                    return (
                     <div key={r.id} className="receipt-item">
                       <div className="flex-between">
                         <div style={{ fontWeight: 700 }}>{r.vendor}</div>
                         <div className="flex" style={{ gap: 4 }}>
+                          <span className={`tag ${dmeta.cls}`} title={dmeta.hint}>{dmeta.label}</span>
                           {r.category && <span className="tag">{r.category}</span>}
-                          {r.is_business === false && <span className="tag" style={{ borderColor: '#a18a45' }}>Personal</span>}
                           {r.project_name && <span className="tag">{r.project_name}</span>}
                         </div>
                       </div>
@@ -1230,7 +1314,8 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             )}

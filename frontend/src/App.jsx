@@ -93,6 +93,7 @@ export default function App() {
 
   const [showTrends, setShowTrends] = useState(false)
   const [trends, setTrends] = useState([])
+  const [chartData, setChartData] = useState(null)
 
   const [categories, setCategories] = useState([])
 
@@ -100,6 +101,14 @@ export default function App() {
   const [editForm, setEditForm] = useState({})
   const [searchQuery, setSearchQuery] = useState('')
   const [viewReceiptImage, setViewReceiptImage] = useState(null)
+  const [toast, setToast] = useState('')
+  const toastTimer = useRef(null)
+
+  const showToast = (msg) => {
+    setToast(msg)
+    clearTimeout(toastTimer.current)
+    toastTimer.current = setTimeout(() => setToast(''), 3000)
+  }
 
   const [errorMsg, setErrorMsg] = useState('')
 
@@ -318,9 +327,19 @@ export default function App() {
     setSelectedProfile(profileId)
     if (profileId) {
       await loadReceiptsForProfile(profileId)
+      fetchChartData(profileId)
     } else {
       setDashboardReceipts([])
+      setChartData(null)
     }
+  }
+
+  const fetchChartData = async (pid) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/analytics/spending-trends?profileId=${pid}&months=6`)
+      const j = await res.json()
+      setChartData(j.trends || [])
+    } catch {}
   }
 
   const createProfile = async () => {
@@ -529,6 +548,7 @@ export default function App() {
             if (jr.receipt) {
               setSelectedReceipt(jr.receipt)
               setStatus(`Receipt saved — ${jr.receipt.vendor} ${money(jr.receipt.total)}`)
+              showToast(`✓ ${jr.receipt.vendor} saved`)
               await fetchProfileSummaries()
               if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
             }
@@ -730,6 +750,22 @@ export default function App() {
     return acc
   }, {})
 
+  const chartMonths = (chartData || []).reduce((acc, t) => {
+    const m = t.month ? t.month.slice(0, 7) : 'unknown'
+    if (!acc[m]) acc[m] = 0
+    acc[m] += Number(t.total_spent || 0)
+    return acc
+  }, {})
+  const chartMonthKeys = Object.keys(chartMonths).slice(0, 6).reverse()
+  const chartMax = Math.max(1, ...chartMonthKeys.map(k => chartMonths[k]))
+  const chartTotal = chartMonthKeys.reduce((a, k) => a + chartMonths[k], 0)
+  const chartBars = chartMonthKeys.map(k => ({
+    month: k,
+    short: k.slice(5),
+    total: chartMonths[k],
+    pct: Math.max(3, (chartMonths[k] / chartMax) * 100),
+  }))
+
   return (
     <div className="app" data-theme={theme}>
       <style>{`
@@ -802,6 +838,11 @@ export default function App() {
           box-shadow: var(--shadow-lg);
         }
         .auth-card h1 { margin: 0 0 4px; color: var(--text); font-size: 26px; font-weight: 800; background: linear-gradient(90deg, var(--accent), var(--accent-2)); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+        .auth-card .auth-logo {
+          display: flex; align-items: center; justify-content: center;
+          width: 52px; height: 52px; border-radius: 14px; margin-bottom: 16px;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+        }
         .auth-card .auth-sub { color: var(--text-3); font-size: 14px; margin-bottom: 26px; }
         .auth-card label { display: block; font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
         .auth-card input {
@@ -838,7 +879,17 @@ export default function App() {
           backdrop-filter: saturate(180%) blur(8px);
         }
         .app-header .brand { display: flex; align-items: center; gap: 10px; }
-        .app-header h1 { margin: 0; font-size: 19px; font-weight: 800; color: var(--text); }
+        .app-header .brand-glyph {
+          display: flex; align-items: center; justify-content: center;
+          width: 34px; height: 34px; border-radius: 10px;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2));
+          color: #fff;
+        }
+        .app-header h1 {
+          margin: 0; font-size: 19px; font-weight: 800; color: var(--text);
+          background: linear-gradient(90deg, var(--accent), var(--accent-2));
+          -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+        }
         .app-header .user-chip { display: flex; align-items: center; gap: 8px; }
         .app-header .user-email { font-size: 13px; color: var(--text-3); }
         .container { max-width: 1100px; margin: 0 auto; padding: 22px; }
@@ -922,6 +973,34 @@ export default function App() {
         .theme-toggle .toggle-track[data-on='true'] { background: var(--accent); }
         .theme-toggle .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left 0.2s; }
         .theme-toggle .toggle-track[data-on='true'] .toggle-thumb { left: 22px; }
+        .hero-card {
+          background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm);
+        }
+        .chart { display: flex; align-items: flex-end; gap: 10px; height: 130px; margin-top: 8px; }
+        .chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; }
+        .chart-bar-track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+        .chart-bar {
+          width: 60%; background: linear-gradient(180deg, var(--accent-2), var(--accent)); border-radius: 6px 6px 0 0;
+          animation: grow 0.6s ease;
+          min-height: 3px;
+        }
+        @keyframes grow { from { height: 0 } }
+        .chart-label { font-size: 11px; color: var(--text-3); }
+        .empty-state { text-align: center; padding: 32px 16px; color: var(--text-3); }
+        .empty-state svg { opacity: 0.5; margin-bottom: 12px; }
+        .empty-state .es-title { font-size: 16px; font-weight: 700; color: var(--text-2); margin-bottom: 4px; }
+        .empty-state .es-sub { font-size: 13px; }
+        .toast {
+          position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+          background: var(--text); color: var(--surface); padding: 10px 18px; border-radius: 10px;
+          font-size: 14px; font-weight: 600; box-shadow: var(--shadow-lg); z-index: 200;
+          animation: toastIn 0.25s ease;
+        }
+        @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 10px) } to { opacity: 1; transform: translate(-50%, 0) } }
+        .theme-toggle .toggle-track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border-strong); position: relative; cursor: pointer; transition: background 0.2s; }
+        .theme-toggle .toggle-track[data-on='true'] { background: var(--accent); }
+        .theme-toggle .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left 0.2s; }
+        .theme-toggle .toggle-track[data-on='true'] .toggle-thumb { left: 22px; }
         @media (max-width: 900px) {
           .main-grid { grid-template-columns: 1fr; }
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -946,6 +1025,12 @@ export default function App() {
       {!user ? (
         <div className="auth-screen">
           <div className="auth-card">
+            <div className="auth-logo">
+              <svg viewBox="0 0 24 24" fill="none" width="30" height="30">
+                <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+                <path d="M14 2v4h4M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+              </svg>
+            </div>
             <h1>ReceiptVault</h1>
             <div className="auth-sub">{resetToken ? 'Set a new password' : authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
             {authError && <div className="auth-error">{authError}</div>}
@@ -998,6 +1083,12 @@ export default function App() {
       <>
         <header className="app-header">
           <div className="brand">
+            <div className="brand-glyph">
+              <svg viewBox="0 0 24 24" fill="none" width="22" height="22">
+                <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+                <path d="M14 2v4h4M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+              </svg>
+            </div>
             <h1>ReceiptVault</h1>
           </div>
           <div className="user-chip">
@@ -1050,6 +1141,31 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {chartData && chartData.length > 0 && (
+          <div className="hero-card" style={{ marginBottom: 16 }}>
+            <div className="flex-between" style={{ marginBottom: 12 }}>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>Spending Overview</div>
+                <div className="muted">Last 6 months • all profiles</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontWeight: 800, fontSize: 20 }}>{money(chartTotal)}</div>
+                <div className="muted">6-month total</div>
+              </div>
+            </div>
+            <div className="chart">
+              {chartBars.map((b, i) => (
+                <div key={i} className="chart-col" title={`${b.month}: ${money(b.total)}`}>
+                  <div className="chart-bar-track">
+                    <div className="chart-bar" style={{ height: `${b.pct}%` }} />
+                  </div>
+                  <div className="chart-label">{b.short}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="shift-panel" style={{ marginBottom: 16 }}>
           <div className="flex-between" style={{ marginBottom: 10 }}>
@@ -1307,8 +1423,17 @@ export default function App() {
                   />
                 </div>
                 <div>
-                  {dashboardReceipts.length === 0 && <div className="muted">No receipts yet for this profile.</div>}
-                  {dashboardReceipts.filter(r => {
+                  {dashboardReceipts.length === 0 ? (
+                    <div className="empty-state">
+                      <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
+                        <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeLinejoin="round"/>
+                        <path d="M14 2v4h4M9 11h6M9 15h4" strokeLinecap="round"/>
+                      </svg>
+                      <div className="es-title">No receipts yet</div>
+                      <div className="es-sub">Snap your first receipt — it's tax-ready in seconds.</div>
+                    </div>
+                  ) : (
+                  dashboardReceipts.filter(r => {
                     const q = searchQuery.toLowerCase()
                     if (!q) return true
                     return [r.vendor, r.category, r.project_name, r.date].some(f => f && String(f).toLowerCase().includes(q))
@@ -1333,7 +1458,8 @@ export default function App() {
                       </div>
                     </div>
                     )
-                  })}
+                  })
+                  )}
                 </div>
               </div>
             )}
@@ -1416,6 +1542,8 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {toast && <div className="toast">{toast}</div>}
       </>
     )}
     </div>

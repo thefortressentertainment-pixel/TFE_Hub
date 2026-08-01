@@ -19,8 +19,47 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 4002;
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (!file) return cb(new Error('No file uploaded'), false);
+    if (!['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'application/pdf'].includes(file.mimetype)) {
+      return cb(new Error('Invalid file type. Please upload an image or PDF.'), false);
+    }
+    cb(null, true);
+  }
+});
 const JWT_SECRET = process.env.JWT_SECRET || 'fortress-dev-secret-change-me';
+
+const failedAttempts = new Map();
+function checkRateLimit(key) {
+  const windowMs = 15 * 60 * 1000;
+  const maxAttempts = 5;
+  const now = Date.now();
+  const entry = failedAttempts.get(key) || { count: 0, firstAttempt: now };
+  if (now - entry.firstAttempt > windowMs) {
+    entry.count = 0;
+    entry.firstAttempt = now;
+  }
+  entry.count++;
+  failedAttempts.set(key, entry);
+  if (entry.count > maxAttempts) {
+    const remaining = Math.ceil((windowMs - (now - entry.firstAttempt)) / 1000);
+    return { blocked: true, remainingSeconds: remaining };
+  }
+  return { blocked: false, attemptsRemaining: maxAttempts - entry.count };
+}
+
+function validatePasswordStrength(password) {
+  const errors = [];
+  if (password.length < 8) errors.push('Password must be at least 8 characters');
+  if (password.length > 64) errors.push('Password must be less than 64 characters');
+  if (!/[a-z]/.test(password)) errors.push('Password must contain a lowercase letter');
+  if (!/[A-Z]/.test(password)) errors.push('Password must contain an uppercase letter');
+  if (!/[0-9]/.test(password)) errors.push('Password must contain a number');
+  return errors;
+}
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -145,11 +184,15 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const body = authSchema.parse(req.body);
     const email = body.email.toLowerCase();
+    const rl = checkRateLimit(`register:${email}`);
+    if (rl.blocked) return res.status(429).json({ error: `Too many attempts. Try again in ${rl.remainingSeconds}s.` });
+    const strengthErrors = validatePasswordStrength(body.password);
+    if (strengthErrors.length) return res.status(400).json({ error: strengthErrors.join('; ') });
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existing.rows.length) {
       return res.status(409).json({ error: 'An account with this email already exists' });
     }
-    const passwordHash = await bcrypt.hash(body.password, 10);
+    const passwordHash = await bcrypt.hash(body.password, 12);
     const r = await pool.query('INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email', [email, passwordHash]);
     const token = jwt.sign({ userId: r.rows[0].id }, JWT_SECRET, { expiresIn: '365d' });
     res.json({ token, user: { id: r.rows[0].id, email: r.rows[0].email } });
@@ -164,6 +207,8 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const body = authSchema.parse(req.body);
     const email = body.email.toLowerCase();
+    const rl = checkRateLimit(`login:${email}`);
+    if (rl.blocked) return res.status(429).json({ error: `Too many attempts. Try again in ${rl.remainingSeconds}s.` });
     const r = await pool.query('SELECT id, email, password_hash FROM users WHERE email = $1', [email]);
     if (!r.rows.length) return res.status(401).json({ error: 'Incorrect email or password' });
     const user = r.rows[0];
@@ -245,6 +290,8 @@ app.post('/api/auth/forgot', async (req, res) => {
 app.post('/api/auth/reset', async (req, res) => {
   try {
     const body = z.object({ token: z.string().min(20), password: z.string().min(8).max(200) }).parse(req.body);
+    const strengthErrors = validatePasswordStrength(body.password);
+    if (strengthErrors.length) return res.status(400).json({ error: strengthErrors.join('; ') });
     const tokenHash = crypto.createHash('sha256').update(body.token).digest('hex');
     const r = await pool.query(
       `SELECT pr.id, pr.user_id FROM password_resets pr
@@ -266,6 +313,14 @@ app.post('/api/auth/reset', async (req, res) => {
 app.post('/api/upload', upload.single('receipt'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (req.file.mimetype !== 'application/pdf') {
+      try {
+        const sharp = require('sharp');
+        await sharp(req.file.buffer).metadata();
+      } catch (e) {
+        return res.status(400).json({ error: 'Corrupted or invalid image file' });
+      }
+    }
     const outDir = process.env.UPLOAD_DIR || defaultUploadDir;
     fs.mkdirSync(outDir, { recursive: true });
     const filename = `${Date.now()}-${req.file.originalname.replace(/\s+/g, '_')}`;

@@ -879,6 +879,11 @@ export default function App() {
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
             <label>Password</label>
             <input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="At least 8 characters" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} onKeyDown={e => e.key === 'Enter' && (resetToken ? doReset() : doAuth(authMode))} />
+            {authMode === 'register' && (
+              <div className="muted" style={{ marginTop: -8, marginBottom: 14, fontSize: 12 }}>
+                Use 8+ characters with upper & lowercase letters and a number.
+              </div>
+            )}
             {resetToken ? (
               <button onClick={doReset} disabled={authLoading}>
                 {authLoading ? 'Please wait...' : 'Reset Password'}

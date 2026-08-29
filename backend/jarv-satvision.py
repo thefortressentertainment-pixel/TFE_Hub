@@ -13,8 +13,10 @@ Usage from JARV (via jarv_run):
 
 import argparse
 import json
+import os
 import sys
 import time
+import urllib.error
 import urllib.request
 import math
 from datetime import datetime, timezone
@@ -37,15 +39,81 @@ CELESTRAK_GROUPS = {
 
 RE_KM = 6378.135
 
+CACHE_FRESH_SECS = 2 * 3600  # CelesTrak refreshes GROUPs roughly every 2 hours
+
 
 def fetch_tle_group(group: str) -> str:
-    """Fetch TLE data from CelesTrak for a group."""
-    if group not in CELESTRAK_GROUPS:
-        group = "active"
-    url = f"https://celestrak.org/NORAD/elements/gp.php?GROUP={CELESTRAK_GROUPS[group]}&FORMAT=json"
+    """Fetch TLE data from CelesTrak for a group, with a retry/backoff and a
+    persistent on-disk cache so a flaky or rate-limited CelesTrak (503/403,
+    the documented 'reuse cached data' cases) never blinds the tunnel.
+
+    Strategy: serve from cache when it is young (< CACHE_FRESH_SECS), else try
+    the network; on failure fall back to any cached copy, whatever its age.
+    """
+    cache_group = group
+    fetch_group = CELESTRAK_GROUPS.get(group, "active")
+    cache = load_cache()
+    cached = cache.get(cache_group)
+    if cached and time.time() - cached.get("fetched_at", 0) < CACHE_FRESH_SECS:
+        print(f"Using fresh cached TLE for {cache_group}", file=sys.stderr)
+        return cached["data"]
+    url = f"https://celestrak.org/NORAD/elements/gp.php?GROUP={fetch_group}&FORMAT=json"
     req = urllib.request.Request(url, headers={"User-Agent": "jarv-satvision/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        return resp.read().decode("utf-8")
+    last_err = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read().decode("utf-8")
+            cache[cache_group] = {"fetched_at": time.time(), "data": data}
+            save_cache(cache)
+            print(f"Fetched {cache_group} from CelesTrak", file=sys.stderr)
+            return data
+        except urllib.error.HTTPError as e:
+            last_err = e
+            if e.code in (403, 429, 503):
+                wait = 8 * (attempt + 1)
+                print(f"TLE fetch {cache_group}: HTTP {e.code} (throttled) — retry in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            break
+        except Exception as e:
+            last_err = e
+            wait = 4 * (attempt + 1)
+            print(f"TLE fetch {cache_group} failed ({e}) — retry in {wait}s", file=sys.stderr)
+            time.sleep(wait)
+    if cached:
+        print(f"Using stale cached TLE for {cache_group} ({last_err})", file=sys.stderr)
+        return cached["data"]
+    raise last_err if last_err else RuntimeError(f"no TLE for {cache_group}")
+
+
+def cache_file() -> str:
+    """Stable per-host cache path (survives restarts, never shipped)."""
+    base = os.environ.get("JARV_TLE_CACHE") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "jarv-sandbox", "tmp", "tle-cache.json")
+    if os.environ.get("JARV_TLE_CACHE") is None:
+        os.makedirs(os.path.dirname(base), exist_ok=True)
+    return base
+
+
+def load_cache() -> dict:
+    try:
+        with open(cache_file(), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_cache(cache: dict) -> None:
+    path = cache_file()
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+        os.replace(tmp, path)
+    except Exception as e:
+        print(f"TLE cache write failed: {e}", file=sys.stderr)
 
 
 def load_catalog(groups: list[str]) -> SatDb:

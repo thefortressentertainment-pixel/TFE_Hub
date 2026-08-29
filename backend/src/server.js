@@ -102,12 +102,15 @@ const receiptQueue = new Queue('receipt processing', process.env.REDIS_URL || 'r
   defaultJobOptions: { removeOnComplete: false, removeOnFail: false }
 });
 const genieMesh = require('./genieMesh');
+const locationService = require('./locationService');
+const locService = locationService.makeLocationService({ pool, log: console });
 const aiBridge = require('./aiBridge');
 const ai = aiBridge.makeAiBridge({ pool, log: console, config: process.env, getMesh: () => mesh });
-const mesh = genieMesh.makeMesh({ pool, log: console, ai });
+const mesh = genieMesh.makeMesh({ pool, log: console, ai, location: locService });
 const jarvAgent = require('./jarvAgent');
-const jarv = jarvAgent.makeJarvAgent({ pool, mesh, ai, log: console });
+const jarv = jarvAgent.makeJarvAgent({ pool, mesh, ai, log: console, locate: () => locService.locate() });
 mesh.setJarv(jarv);
+mesh.setLocation(locService);
 // Telegram tunnel — outbound-only command channel (long-poll, zero inbound
 // ports) so JARV-Genie keeps an always-available path behind CGNAT/satellite.
 const telegramTunnel = require('./telegramTunnel');
@@ -1017,6 +1020,40 @@ app.post('/api/osint/satvision', async (req, res) => {
     const args = {};
     for (const p of OSINT_SATVISION_PARAMS) if (body[p] !== undefined) args[p] = body[p];
     const out = await jarv.executeTool('jarv_satvision', args);
+    return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// Global projection of the OSINT catalog: every loaded satellite's current
+// subpoint (lat/lon/alt) for 3D globe rendering (Babylon).
+app.get('/api/osint/globe', async (req, res) => {
+  try {
+    const groups = String(req.query.satellites || 'starlink,oneweb,iridium-next,gps').replace(/\s+/g, '');
+    const out = await jarv.executeTool('jarv_globe', { satellites: groups });
+    return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ---- Hub location services (family grid fix) ----
+app.get('/api/location', async (req, res) => {
+  try { return res.json(await locService.getCurrent()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.get('/api/location/devices', async (req, res) => {
+  try { return res.json(await locService.getDevices()); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/location/report', async (req, res) => {
+  try {
+    const b = (req.body || {});
+    const out = await locService.report({ lat: b.lat, lon: b.lon, accuracy_m: b.accuracy, source: b.source || 'device', deviceId: req.deviceId || `web-${Date.now()}` });
+    return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/location/manual', async (req, res) => {
+  try {
+    const b = (req.body || {});
+    const out = await locService.setManual({ lat: b.lat, lon: b.lon, accuracy_m: b.accuracy });
     return res.json(out);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });

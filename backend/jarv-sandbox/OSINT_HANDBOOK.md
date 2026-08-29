@@ -71,3 +71,20 @@ Returns JSON: `observer`, `timestamp`, `satellites_tracked`, and (as requested)
   about latency/doppler.
 - Do not fabricate satellite positions when offline — if CelesTrak is
   unreachable, say the TLE source is down, don't invent passes.
+## Location Services (jarv_location) & the Sanctuary Globe (jarv_globe)
+
+- **jarv_location** pings the hub-node location services for the family grid
+  fix. Precedence: manual/home coordinates (HUB_LAT/HUB_LON or the hub manual
+  row) → most recent family-device fix (within TTL) → IP geolocation. Returns
+  `{ok, here:{lat,lon,accuracy_m,source,updated_at}}`. Prefer it over asking
+  the operator for lat/lon; you may pass `lat`/`lon` yourself only as a manual
+  override when the operator explicitly gives them.
+- **jarv_satvision** needs no observer: if `lat`/`lon` are omitted it pulls the
+  current hub location automatically. Mention "using the family grid fix" when
+  you do this.
+- **jarv_globe** returns the subpoint lat/lon/alt of *every* loaded satellite
+  (not just those above an observer) for the global projection / sanctuary
+  globe. Use it for constellation-wide reasoning, interop windows, and
+  "what's over region X" questions — the globe shows the whole system at once.
+- When the family grid and the globe disagree with a CelesTrak outage, trust the
+  cache + say so; never invent satellites.

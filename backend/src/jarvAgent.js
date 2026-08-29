@@ -50,7 +50,7 @@ const BLOCKED_PATTERNS = [
  * and a scrubbed environment {PATH,HOME,TZ} so secrets from the host env can
  * never leak into a subprocess the model drives.
  */
-const SAFE_TOOLS = new Set(['jarv_read', 'jarv_list', 'jarv_osint_handbook', 'jarv_satvision']);
+const SAFE_TOOLS = new Set(['jarv_read', 'jarv_list', 'jarv_osint_handbook', 'jarv_satvision', 'jarv_location', 'jarv_globe']);
 const CONFIRM_TOOLS = new Set(['jarv_run', 'jarv_write', 'jarv_edit']);
 const AUTONOMOUS_SHELL_ALLOWLIST = DEFAULT_ALLOWLIST.filter((e) => e.bin !== 'curl' && e.bin !== 'wget');
 const MIN_ENV = {
@@ -160,7 +160,9 @@ function getToolDefs() {
     { name: 'jarv_list', description: 'List files and directories in a sandbox path.', params: { path: 'relative path (optional)' } },
     { name: 'jarv_run', description: 'Run a constrained shell command. Allowlisted bins only (cat, python3, node, git, curl, grep). No rm/sudo/chained destructive.', params: { command: 'shell command string' } },
     { name: 'jarv_edit', description: 'Edit a file by replacing all occurrences of a search string.', params: { path: 'relative path', search: 'string to find', replace: 'replacement string' } },
-    { name: 'jarv_satvision', description: 'Satellite communications OSINT vision. Query overhead satellites, predict passes, calculate coverage footprints for Starlink/OneWeb/Iridium/GPS. Returns JSON with satellite positions, elevations, azimuths, ranges, and footprint radii.', params: { lat: 'observer latitude (required)', lon: 'observer longitude (required)', alt: 'observer altitude meters (optional, default 10)', satellites: 'comma-separated groups: starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo (optional, default starlink,oneweb,iridium-next,gps)', passes: 'max passes per satellite (optional, default 3)', min_el: 'minimum elevation degrees (optional, default 10)', overhead: 'include currently overhead satellites (optional, boolean)', footprint: 'include coverage footprints (optional, boolean)' } },
+    { name: 'jarv_satvision', description: 'Satellite communications OSINT vision. Query overhead satellites, predict passes, calculate coverage footprints for Starlink/OneWeb/Iridium/GPS. Returns JSON. Omit lat/lon to use the live hub-node location services; optionally pass explicit lat/lon.', params: { lat: 'observer latitude (optional, default: hub location services)', lon: 'observer longitude (optional, default: hub location services)', alt: 'observer altitude meters (optional, default 10)', satellites: 'comma-separated groups: starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo (optional, default starlink,oneweb,iridium-next,gps)', passes: 'max passes per satellite (optional, default 3)', min_el: 'minimum elevation degrees (optional, default 10)', overhead: 'include currently overhead satellites (optional, boolean)', footprint: 'include coverage footprints (optional, boolean)' } },
+    { name: 'jarv_location', description: 'Ping the hub-node location services for the family\u2019s current latitude and longitude (live device fix, manual home coordinates, or IP geolocation). Pass explicit lat/lon to fix a manual observer position instead.', params: { lat: 'manual latitude override (optional)', lon: 'manual longitude override (optional)', accuracy_m: 'manual accuracy estimate meters (optional)' } },
+    { name: 'jarv_globe', description: 'Global OSINT projection: current subpoint (lat/lon/alt) for every loaded satellite, for rendering the sanctuary globe. No observer needed.', params: { satellites: 'comma-separated groups: starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo (required)' } },
     { name: 'jarv_osint_handbook', description: 'Your cross-training doc for OSINT (satellite comms intelligence). Read this before answering any OSINT request. Explains the installed toolchain (OrbitDeck + jarv-satvision), how to read elevations/ranges/pass windows, and the continuity playbooks.', params: {} },
   ];
 }
@@ -177,8 +179,10 @@ function getOpenAITools() {
     { type: 'function', function: { name: 'jarv_list', description: 'List files/directories in a sandbox path.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'relative path (optional, default root)' } } } } },
     { type: 'function', function: { name: 'jarv_run', description: 'Run a constrained shell command (allowlisted bins: cat, ls, grep, python3, node, git, curl, jq, ...). Blocked: rm/sudo/chained destructive.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
     { type: 'function', function: { name: 'jarv_edit', description: 'Replace all occurrences of a search string in a sandbox file.', parameters: { type: 'object', properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } }, required: ['path', 'search', 'replace'] } } },
-    { type: 'function', function: { name: 'jarv_satvision', description: 'Satellite communications OSINT. Live query of overhead satellites, pass predictions, and Earth coverage footprints for Starlink/OneWeb/Iridium/GPS/Galileo/etc via OrbitDeck + CelesTrak. Returns JSON.', parameters: { type: 'object', properties: { lat: { type: 'number', description: 'observer latitude decimal degrees' }, lon: { type: 'number', description: 'observer longitude decimal degrees' }, alt: { type: 'number', description: 'observer altitude meters (default 10)' }, satellites: { type: 'string', description: 'comma-separated groups: starlink,oneweb,iridium-next,globalstar,gps,galileo,glonass,beidou,geo (default starlink,oneweb,iridium-next,gps)' }, passes: { type: 'number', description: 'max passes per satellite (default 3)' }, min_el: { type: 'number', description: 'minimum elevation degrees (default 10)' }, overhead: { type: 'boolean', description: 'include satellites currently above the horizon' }, footprint: { type: 'boolean', description: 'include Earth coverage footprints' } }, required: ['lat', 'lon'] } } },
+    { type: 'function', function: { name: 'jarv_satvision', description: 'Satellite communications OSINT. Live query of overhead satellites, pass predictions, and Earth coverage footprints for Starlink/OneWeb/Iridium/GPS/Galileo/etc via OrbitDeck + CelesTrak. Omit lat/lon to use the live hub location services; pass explicit lat/lon to override. Returns JSON.', parameters: { type: 'object', properties: { lat: { type: 'number', description: 'observer latitude decimal degrees (optional — default: live hub fix)' }, lon: { type: 'number', description: 'observer longitude decimal degrees (optional — default: live hub fix)' }, alt: { type: 'number', description: 'observer altitude meters (default 10)' }, satellites: { type: 'string', description: 'comma-separated groups: starlink,oneweb,iridium-next,globalstar,gps,galileo,glonass,beidou,geo (default starlink,oneweb,iridium-next,gps)' }, passes: { type: 'number', description: 'max passes per satellite (default 3)' }, min_el: { type: 'number', description: 'minimum elevation degrees (default 10)' }, overhead: { type: 'boolean', description: 'include satellites currently above the horizon' }, footprint: { type: 'boolean', description: 'include Earth coverage footprints' } } } } },
     { type: 'function', function: { name: 'jarv_osint_handbook', description: 'Read your satellite-comms OSINT cross-training document. Consult this before answering OSINT/coverage questions.', parameters: { type: 'object', properties: {} } } },
+    { type: 'function', function: { name: 'jarv_location', description: 'Ping the hub-node location services for the family\u2019s current lat/lon (live device fix, manual home grid, or IP geolocation). Pass lat/lon to enter a manual observer position instead.', parameters: { type: 'object', properties: { lat: { type: 'number', description: 'manual latitude override' }, lon: { type: 'number', description: 'manual longitude override' }, accuracy_m: { type: 'number', description: 'manual accuracy estimate in meters' } } } } },
+    { type: 'function', function: { name: 'jarv_globe', description: 'Global OSINT projection: current subpoint lat/lon/alt of every loaded satellite for the sanctuary globe. Returns a positions array.', parameters: { type: 'object', properties: { satellites: { type: 'string', description: 'comma-separated groups: starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo' } }, required: ['satellites'] } } },
   ];
 }
 
@@ -190,17 +194,33 @@ function dispatchTool(name, args, ctx) {
     case 'jarv_list': return listDir(args.path, sandbox);
     case 'jarv_edit': return fileEdit(args.path, args.search, args.replace, sandbox);
     case 'jarv_run': return execAllowlist(args.command, { sandboxRoot: sandbox });
-    case 'jarv_satvision': return execSatVision(args, sandbox);
+    case 'jarv_satvision': return execSatVision(args, sandbox, ctx.locate);
+    case 'jarv_location': return execLocation(args, ctx.locate);
+    case 'jarv_globe': return execGlobe(args, sandbox);
     case 'jarv_osint_handbook': return readHandbook(sandbox);
     default: return { ok: false, error: `unknown tool: ${name}` };
   }
 }
 
-async function execSatVision(args, sandbox) {
+async function execSatVision(args, sandbox, locate) {
   const scriptPath = path.resolve(__dirname, '..', 'jarv-satvision.py');
   const cmdArgs = ['python3', scriptPath, '--json'];
-  const lat = args.lat != null ? args.lat : process.env.JARV_DEFAULT_LAT;
-  const lon = args.lon != null ? args.lon : process.env.JARV_DEFAULT_LON;
+  let lat = args.lat != null ? args.lat : process.env.JARV_DEFAULT_LAT;
+  let lon = args.lon != null ? args.lon : process.env.JARV_DEFAULT_LON;
+  if ((lat == null || lon == null)) {
+    if (typeof locate === 'function') {
+      try {
+        const here = await locate();
+        if (lat == null) lat = here.lat;
+        if (lon == null) lon = here.lon;
+      } catch (e) {
+        return { ok: false, error: `no observer location available: ${(e && e.message) || e}` };
+      }
+    }
+    if (lat == null || lon == null) {
+      return { ok: false, error: 'no observer location: set JARV_DEFAULT_LAT/JARV_DEFAULT_LON or wire hub location services' };
+    }
+  }
   if (lat != null) cmdArgs.push('--lat', String(lat));
   if (lon != null) cmdArgs.push('--lon', String(lon));
   if (args.alt != null) cmdArgs.push('--alt', String(args.alt));
@@ -220,10 +240,62 @@ function readHandbook(sandbox) {
   return { ok: false, error: 'OSINT handbook missing (expected jarv-sandbox/OSINT_HANDBOOK.md)' };
 }
 
-function makeJarvAgent({ pool, mesh, ai, log, safety = {} }) {
+/** Hub-node location ping for JARV: manual override or live location services. */
+async function execLocation(args, locate) {
+  const lat = args.lat != null ? Number(args.lat) : undefined;
+  const lon = args.lon != null ? Number(args.lon) : undefined;
+  if (lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)) {
+    return {
+      ok: true,
+      here: { lat, lon, accuracy_m: args.accuracy_m != null ? Number(args.accuracy_m) : null, source: 'manual-input' },
+      at: new Date().toISOString(), manual: true,
+      note: 'operator-provided fix (manual input honored)',
+    };
+  }
+  if (typeof locate !== 'function') {
+    return { ok: false, error: 'hub location services not wired' };
+  }
+  try {
+    const here = await locate();
+    return { ok: true, here, at: new Date().toISOString(), manual: false, note: 'live hub-node location services' };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+/** Global OSINT projection: subpoint of every loaded satellite for the globe. */
+async function execGlobe(args, sandbox) {
+  const scriptPath = path.resolve(__dirname, '..', 'jarv-satvision.py');
+  const raw = String(args.satellites || 'starlink,oneweb,iridium-next,gps');
+  const groups = raw.split(/[, ]+/).filter((g) => /^[a-z][a-z0-9-]*$/i.test(g)).join(',');
+  if (!groups) return { ok: false, error: 'no valid satellite groups' };
+  const out = await execAllowlist(
+    `python3 ${scriptPath} --json --positions --satellites ${groups}`,
+    { sandboxRoot: sandbox, timeout: 120000, maxOutput: 8 * 1024 * 1024 },
+  );
+  if (!out.ok) return out;
+  try {
+    const data = JSON.parse(out.stdout || '{}');
+    if (!Array.isArray(data.positions)) return { ok: false, error: 'globe: no positions in output', stderr: String(out.stderr || '').slice(0, 400) };
+    return { ok: true, mode: 'globe', timestamp: data.timestamp, satellites_tracked: data.satellites_tracked, positions: data.positions };
+  } catch (e) {
+    return { ok: false, error: `globe parse failed: ${(e && e.message) || e}`, stderr: String(out.stderr || '').slice(0, 400) };
+  }
+}
+
+function makeJarvAgent({ pool, mesh, ai, log, safety = {}, locate } = {}) {
   const logFn = typeof log === 'function' ? log : (log && typeof log.info === 'function' ? log.info.bind(log) : () => {});
   const sandboxRoot = resolveSandbox();
   fs.mkdirSync(sandboxRoot, { recursive: true });
+  const locateFn = typeof locate === 'function'
+    ? locate
+    : async () => {
+        const lat = Number(process.env.JARV_DEFAULT_LAT);
+        const lon = Number(process.env.JARV_DEFAULT_LON);
+        if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon, source: 'env-default' };
+        throw new Error('no hub location services wired (set JARV_DEFAULT_LAT/JARV_DEFAULT_LON or install the location service)');
+      };
+  const toolContext = { sandboxRoot, locate: locateFn };
 
   const policy = {
     safeTools: [...SAFE_TOOLS],
@@ -235,7 +307,7 @@ function makeJarvAgent({ pool, mesh, ai, log, safety = {} }) {
   const tools = getToolDefs();
 
   async function executeTool(name, args) {
-    const result = dispatchTool(name, args, { sandboxRoot });
+    const result = dispatchTool(name, args, toolContext);
     if (result instanceof Promise) return result;
     return result;
   }
@@ -262,9 +334,9 @@ function makeJarvAgent({ pool, mesh, ai, log, safety = {} }) {
       }
       if (name === 'jarv_write' || name === 'jarv_edit') {
         // Unlocked by the operator for this session; still confined to sandbox.
-        return dispatchTool(name, args, { sandboxRoot });
+        return dispatchTool(name, args, toolContext);
       }
-      return dispatchTool(name, args, { sandboxRoot });
+      return dispatchTool(name, args, toolContext);
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e) };
     }

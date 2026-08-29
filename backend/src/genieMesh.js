@@ -484,6 +484,32 @@ function buildExecutor(pool, meshRef) {
       return ctx.jarv.executeTool('jarv_satvision', args);
     },
 
+    'location.get': async (args = {}, ctx = {}) => {
+      if (!ctx.location) throw new Error('hub location services not available');
+      return ctx.location.getCurrent();
+    },
+    'location.report': async (args = {}, ctx = {}) => {
+      if (!ctx.location) throw new Error('hub location services not available');
+      const lat = Number(args.lat); const lon = Number(args.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('lat and lon numbers required');
+      return ctx.location.report({
+        lat, lon,
+        accuracy_m: args.accuracy_m != null ? Number(args.accuracy_m) : null,
+        source: args.source || 'device',
+        deviceId: (ctx.session && ctx.session.deviceId) || ctx.deviceId || 'mesh',
+      });
+    },
+    'location.manual': async (args = {}, ctx = {}) => {
+      if (!ctx.location) throw new Error('hub location services not available');
+      const lat = Number(args.lat); const lon = Number(args.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw new Error('lat and lon numbers required');
+      return ctx.location.setManual({ lat, lon, accuracy_m: args.accuracy_m != null ? Number(args.accuracy_m) : null });
+    },
+    'location.devices': async (args = {}, ctx = {}) => {
+      if (!ctx.location) throw new Error('hub location services not available');
+      return ctx.location.getDevices();
+    },
+
     // Full JARV chat: AI tool-use loop so JARV answers using its tools
     // (OSINT handbook, jarv_satvision, sandbox read/write/run) mid-conversation.
     // Safety: model-driven tools are risk-gated by JARV policy. jarv_run /
@@ -519,14 +545,18 @@ function buildExecutor(pool, meshRef) {
 
   let currentJarv = meshRef.jarv;
   function setJarv(j) { currentJarv = j; }
+  let currentLocation = meshRef.location;
+  function setLocation(l) { currentLocation = l; }
 
   async function executor(command, args, ctx = {}) {
     const fn = handlers[command];
     if (!fn) throw new Error(`unknown command: ${command}`);
-    return fn(args, { ...ctx, jarv: currentJarv });
+    return fn(args, { ...ctx, jarv: currentJarv, location: currentLocation });
   }
 
   executor.setJarv = setJarv;
+  executor.setLocation = setLocation;
+  executor.getLocationService = () => currentLocation;
   return executor;
 }
 exports.buildExecutor = buildExecutor;
@@ -534,7 +564,7 @@ exports.buildExecutor = buildExecutor;
  * makeMesh — the main controller: peer seeding, durability helpers, the
  * persistent outbound WebSocket link, and the HTTPS fallback flusher.
  * ------------------------------------------------------------------ */
-function makeMesh({ pool, log, config = {}, ai = null, jarv = null }) {
+function makeMesh({ pool, log, config = {}, ai = null, jarv = null, location = null }) {
   const cfg = {
     enabled: envBool(config.enabled != null ? config.enabled : process.env.GENIE_MESH_ENABLED, true),
     peerName: config.peerName || DEFAULT_PEER_NAME,
@@ -574,11 +604,15 @@ function makeMesh({ pool, log, config = {}, ai = null, jarv = null }) {
     flusherTimer: null,
     pumpTimer: null,
     ai: ai,
-    jarv: null,
+    jarv: jarv,
+    location: location,
   };
-  const executor = buildExecutor(pool, { getStatus: () => getStatus(), ai: state.ai, jarv: state.jarv });
+  const executor = buildExecutor(pool, { getStatus: () => getStatus(), ai: state.ai, jarv: state.jarv, location: state.location });
 
   function setJarv(j) { state.jarv = j; executor.setJarv(j); }
+  function setLocation(l) { state.location = l; executor.setLocation(l); }
+  if (jarv) executor.setJarv(jarv);
+  if (location) executor.setLocation(location);
 
   async function refreshDefaultPeer() {
     if (!cfg.enabled) { state.defaultPeer = null; return null; }
@@ -956,6 +990,7 @@ function makeMesh({ pool, log, config = {}, ai = null, jarv = null }) {
     ai: state.ai,
     config: cfg,
     setJarv,
+    setLocation,
   };
 }
 
@@ -1016,6 +1051,14 @@ function createGenieApi({ pool, mesh, rateLimit, log }) {
   router.get('/analytics/spending-trends', (req, res) => void runAs(req, res, 'analytics.trends', {
     profileId: req.query.profileId, months: req.query.months,
   }));
+
+  // ---- Hub location services (the family grid fix) ----
+  router.get('/location', (req, res) => void runAs(req, res, 'location.get', {}));
+  router.get('/location/devices', (req, res) => void runAs(req, res, 'location.devices', {}));
+  router.post('/location/report', (req, res) => void runAs(req, res, 'location.report', {
+    ...(req.body || {}), deviceId: req.geniePeer.deviceId || req.geniePeer.id,
+  }));
+  router.post('/location/manual', (req, res) => void runAs(req, res, 'location.manual', req.body || {}));
 
   // ---- Genie AI relay (Free DeepSeek V4 as JARV-Genie's main brain) ----
   // Same key-auth + rate-limit + audit as everything else; the heavy lifting

@@ -59,9 +59,12 @@ async function main() {
 
   console.log('\n[5] OpenAI tool schema');
   const tools = jarvAgent.getOpenAITools();
-  check('schema exposes 7 tools', Array.isArray(tools) && tools.length === 7);
+  check('schema exposes 9 tools', Array.isArray(tools) && tools.length === 9);
   const sat = tools.find((t) => t.function.name === 'jarv_satvision');
-  check('jarv_satvision schema requires lat+lon', !!sat && sat.function.parameters.required.includes('lat') && sat.function.parameters.required.includes('lon'));
+  check('jarv_satvision lat/lon optional (hub fix default)', !!sat && (sat.function.parameters.required || []).length === 0);
+  const locT = tools.find((t) => t.function.name === 'jarv_location');
+  const globeT = tools.find((t) => t.function.name === 'jarv_globe');
+  check('schema exposes jarv_location + jarv_globe', !!locT && !!globeT);
   check('schema serializes to valid JSON', (() => { try { JSON.stringify(tools); return true; } catch (e) { return false; } })());
   let askRouteErr = null;
   try { await executor('jarv.ask', { prompt: 'hi' }, {}); }
@@ -147,6 +150,58 @@ async function main() {
 
   try { jarv.dispose && jarv.dispose(); } catch (e) {}
   fsRmdir(sandbox);
+
+  console.log('\n[8] hub location services + location/globe tooling');
+  const location = require('../src/locationService');
+  const stored = [];
+  const locPool = {
+    async query(sql, params) {
+      if (/CREATE TABLE IF NOT EXISTS hub_locations/.test(sql)) return { rows: [] };
+      if (/INSERT INTO hub_locations/.test(sql)) {
+        stored.push({ device_id: params[0], lat: params[1], lon: params[2], accuracy_m: params[3], source: params[4], updated_at: new Date() });
+        return { rows: [] };
+      }
+      if (/SELECT device_id/.test(sql)) {
+        if (/device_id = \$1/.test(sql)) {
+          return { rows: stored.filter((r) => r.device_id === 'hub').slice(-1) };
+        }
+        const ttl = Number(params && params[0] || 21600);
+        const now = Date.now();
+        return { rows: stored.filter((r) => r.device_id !== 'hub' && (now - new Date(r.updated_at).getTime()) / 1000 < ttl).slice(-1) };
+      }
+      return { rows: [], rowCount: 0 };
+    },
+  };
+  const loc = location.makeLocationService({ pool: locPool, log: () => {} });
+  const rep = await loc.report({ lat: 40.1, lon: -75.1, accuracy_m: 20, deviceId: 'phone-1' });
+  check('location.report stores a device fix', rep.ok === true);
+  const cur = await loc.getCurrent();
+  check('location.getCurrent resolves to latest device fix', cur.ok === true && cur.lat === 40.1 && cur.lon === -75.1 && cur.source === 'device');
+  const manual = await loc.setManual({ lat: 33.4, lon: -111.9 });
+  check('location.setManual stores hub row', manual.ok === true && manual.deviceId === 'hub');
+  const after = await loc.getCurrent();
+  check('manual hub row overrides device fix', after.ok === true && after.lon === -111.9);
+  const bad = await loc.report({ lat: 'nope', lon: -75.1 });
+  check('location.report rejects non-numeric', bad.ok === false);
+
+  const locatedJarv = jarvAgent.makeJarvAgent({
+    pool: makeTinyPool(), log: () => {},
+    locate: async () => ({ lat: 41.8781, lon: -87.6298, source: 'test-grid' }),
+  });
+  const locFix = await locatedJarv.executeTool('jarv_location', {});
+  check('jarv_location pings location services', locFix.ok === true && locFix.here.lat === 41.8781 && locFix.here.source === 'test-grid');
+  const locManual = await locatedJarv.executeTool('jarv_location', { lat: 51.5, lon: -0.12 });
+  check('jarv_location honors manual override', locManual.ok === true && locManual.here.source === 'manual-input' && locManual.manual === true);
+  const satNoCoords = await locatedJarv.executeTool('jarv_satvision', { satellites: 'iss', passes: 1 });
+  check('jarv_satvision no-coords uses hub fix', satNoCoords.ok === true && satNoCoords.stdout && /"lat": 41\.8781/.test(satNoCoords.stdout));
+
+  const locExec = genieMesh.buildExecutor(makeTinyPool(), { getStatus: () => ({ ok: true }), location: loc });
+  const locMesh = await locExec('location.get', {}, {});
+  check('mesh command location.get wired', locMesh && locMesh.ok === true && 'lat' in locMesh);
+  let locBad = null;
+  try { await locExec('location.report', { lat: 'x', lon: 1 }, {}); }
+  catch (e) { locBad = String((e && e.message) || e); }
+  check('mesh location.report guards types', !!locBad && /lat and lon numbers/.test(locBad));
 }
 
 function fsMkdtemp() {

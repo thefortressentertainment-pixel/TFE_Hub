@@ -251,10 +251,39 @@ def get_footprint(sat, observer: Observer):
         return {"satellite": sat.name, "error": str(e)}
 
 
+def get_all_positions(db: SatDb, groups: list[str]) -> list:
+    """Subpoint (lat/lon/alt) of every loaded satellite right now — the global
+    projection for the sanctuary globe. Observer-independent."""
+    now = time.time()
+    out = []
+    for sat in db.sats:
+        try:
+            pred = Predictor()
+            pred.set_sat(sat)
+            if not pred._have:
+                continue
+            lat, lon, alt = pred.subpoint_at(now)
+            if lat is None or lon is None:
+                continue
+            span = sat.name.lower()
+            group = next((g for g in groups if g.lower() in span), "other")
+            out.append({
+                "satellite": sat.name,
+                "norad": sat.norad,
+                "group": group,
+                "lat": round(lat, 4),
+                "lon": round(lon, 4),
+                "alt_km": round(alt, 1),
+            })
+        except Exception as e:
+            print(f"Position failed for {sat.name}: {e}", file=sys.stderr)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Satellite communications vision for JARV")
-    parser.add_argument("--lat", type=float, required=True, help="Observer latitude")
-    parser.add_argument("--lon", type=float, required=True, help="Observer longitude")
+    parser.add_argument("--lat", type=float, default=None, help="Observer latitude (omit only with --positions)")
+    parser.add_argument("--lon", type=float, default=None, help="Observer longitude (omit only with --positions)")
     parser.add_argument("--alt", type=float, default=10.0, help="Observer altitude (meters)")
     parser.add_argument("--satellites", type=str, default="starlink,oneweb,iridium,gps",
                         help="Comma-separated satellite groups to track")
@@ -263,20 +292,33 @@ def main():
     parser.add_argument("--overhead", action="store_true", help="Show currently overhead satellites")
     parser.add_argument("--footprint", action="store_true", help="Calculate coverage footprints")
     parser.add_argument("--radius-km", type=float, default=1000, help="Footprint radius limit")
+    parser.add_argument("--positions", action="store_true", help="Global projection: subpoint of every loaded sat (no observer)")
     parser.add_argument("--json", action="store_true", help="Output as JSON")
     args = parser.parse_args()
 
-    observer = Observer(lat=args.lat, lon=args.lon, alt_m=args.alt, valid=True)
     groups = [g.strip() for g in args.satellites.split(",")]
-
     db = load_catalog(groups)
     satellites = filter_satellites(db, groups)
 
-    result = {
-        "observer": {"lat": args.lat, "lon": args.lon, "alt_m": args.alt},
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "satellites_tracked": len(satellites),
-    }
+    result = {"timestamp": datetime.now(timezone.utc).isoformat()}
+
+    if args.positions:
+        result["mode"] = "globe"
+        result["positions"] = get_all_positions(db, groups)
+        result["satellites_tracked"] = len(satellites)
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print(f"Global OSINT projection — {result['timestamp']}")
+            print(f"Sats: {len(result['positions'])} positions from {args.satellites}")
+        return
+
+    if args.lat is None or args.lon is None:
+        parser.error("--lat and --lon are required unless --positions is used")
+
+    observer = Observer(lat=args.lat, lon=args.lon, alt_m=args.alt, valid=True)
+    result["observer"] = {"lat": args.lat, "lon": args.lon, "alt_m": args.alt}
+    result["satellites_tracked"] = len(satellites)
 
     if args.overhead:
         result["overhead"] = get_overhead(db, observer, satellites, args.min_el)

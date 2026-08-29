@@ -17,6 +17,32 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: GENIE_MESH_ENABLED
+        value: "true"
+      - key: GENIE_SATLINK
+        value: "false"
+      - key: JARV_GENIE_URL
+        sync: false
+      - key: JARV_GENIE_API_KEY
+        sync: false
+      - key: JARV_GENIE_OUTBOUND_TOKEN
+        sync: false
+      - key: GENIE_AI_ENABLED
+        value: "true"
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: DEEPSEEK_BASE_URL
+        value: "https://api.deepseek.com/v1"
+      - key: DEEPSEEK_MODEL
+        value: "deepseek-v4"
+      - key: DEEPSEEK_FALLBACK_MODELS
+        value: "deepseek-v4,deepseek-chat,deepseek-reasoner"
+      - key: DEEPSEEK_FREE
+        value: "true"
+      - key: DEEPSEEK_MAX_TOKENS
+        value: "2000"
+      - key: DEEPSEEK_SYSTEM_PROMPT
+        sync: false
 
   - type: web
     name: tfe-hub-worker
@@ -36,3 +62,5 @@ services:
         sync: false
       - key: OPENAI_API_KEY
         sync: false
+      - key: GENIE_MESH_ENABLED
+        value: "true"

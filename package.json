@@ -9,7 +9,8 @@
     "dev": "concurrently -k \"npm run start:backend\" \"npm run start:worker\" \"npm run start:frontend\"",
     "start:backend": "npm --workspace backend start",
     "start:worker": "npm --workspace worker start",
-    "start:frontend": "npm --workspace frontend start"
+    "start:frontend": "npm --workspace frontend start",
+    "smoke": "npm --workspace backend run smoke"
   },
   "devDependencies": {
     "concurrently": "^8.0.4"

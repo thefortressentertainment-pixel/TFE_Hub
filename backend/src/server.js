@@ -19,6 +19,10 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
 const PORT = process.env.PORT || 4002;
+// Bind explicitly so tunnel traffic (Tailscale 100.x / ts.net, LAN) is
+// reachable. HOST=127.0.0.1 locks it to loopback; HOST=<tailscale-ip> locks it
+// to the tailnet only.
+const HOST = process.env.HOST || '0.0.0.0';
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024, files: 1 },
@@ -97,6 +101,14 @@ const defaultUploadDir = path.resolve(__dirname, '..', 'tmp', 'uploads');
 const receiptQueue = new Queue('receipt processing', process.env.REDIS_URL || 'redis://127.0.0.1:6379', {
   defaultJobOptions: { removeOnComplete: false, removeOnFail: false }
 });
+const genieMesh = require('./genieMesh');
+const aiBridge = require('./aiBridge');
+const ai = aiBridge.makeAiBridge({ pool, log: console, config: process.env, getMesh: () => mesh });
+const mesh = genieMesh.makeMesh({ pool, log: console, ai });
+// Telegram tunnel — outbound-only command channel (long-poll, zero inbound
+// ports) so JARV-Genie keeps an always-available path behind CGNAT/satellite.
+const telegramTunnel = require('./telegramTunnel');
+const telegram = telegramTunnel.makeTelegramTunnel({ pool, mesh, log: console, config: process.env });
 
 io.on('connection', socket => {
   socket.on('subscribe:profile', profileId => {
@@ -353,6 +365,7 @@ app.post('/api/upload', upload.single('receipt'), async (req, res) => {
     let job;
     try {
       job = await receiptQueue.add({ filePath, originalName: req.file.originalname, profileId, projectName, isBusiness, fileHash, deviceId, ownerId });
+      mesh.emit('receipt.uploaded', { jobId: String(job.id), profileId, originalName: req.file.originalname, total: req.body.total || 0 });
       res.json({ success: true, jobId: job.id, filePath, profileId });
     } catch (e) {
       console.warn('Queue unavailable, processing inline:', e.message);
@@ -407,6 +420,7 @@ app.post('/api/native-vision', async (req, res) => {
 
     const receiptId = result.rows[0].id;
     io.to(`profile:${profileId}`).emit('receipt:new', { receiptId, vendor, total, date, category });
+    mesh.emit('receipt.processed', { receiptId, profileId, vendor, total, date, category, taxAmount, source: 'native-vision' });
 
     res.json({ success: true, receiptId, profileId, vendor, total, date, category, taxAmount });
   } catch (e) {
@@ -783,6 +797,7 @@ app.post('/api/mileage', async (req, res) => {
       [body.profile_id, body.date || new Date().toISOString().split('T')[0], body.start_odometer || null, body.end_odometer || null, body.purpose || null, body.project_name || null, body.is_business, req.deviceId, req.userId]
     );
     io.to(`profile:${body.profile_id}`).emit('mileage:new', r.rows[0]);
+    mesh.emit('mileage.created', { id: r.rows[0].id, profile_id: r.rows[0].profile_id, miles: r.rows[0].miles, date: r.rows[0].date, purpose: r.rows[0].purpose });
     res.json({ mileage: r.rows[0] });
   } catch (e) {
     if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid data', details: e.errors });
@@ -841,6 +856,7 @@ app.post('/api/shifts/end', async (req, res) => {
     );
     if (!r.rows.length) return res.status(404).json({ error: 'No active shift found' });
     io.to(`profile:${r.rows[0].profile_id}`).emit('shift:end', r.rows[0]);
+    mesh.emit('shift.completed', { id: r.rows[0].id, profile_id: r.rows[0].profile_id, miles: r.rows[0].miles, end_time: r.rows[0].end_time, purpose: r.rows[0].purpose });
     res.json({ shift: r.rows[0] });
   } catch (e) {
     if (e instanceof z.ZodError) return res.status(400).json({ error: 'Invalid data', details: e.errors });
@@ -945,7 +961,50 @@ app.get('/api/categories', (req, res) => {
   res.json({ categories: CATEGORY_KEYWORDS.map(c => c.category).filter((v, i, a) => a.indexOf(v) === i) });
 });
 
-server.listen(PORT, () => console.log(`Backend listening on ${PORT}`));
+// ---- Genie Mesh: persistent JARV-Genie link + agentic REST gateway ----
+app.set('genie:io', io);
+app.use('/api/genie', genieMesh.createGenieApi({ pool, mesh, rateLimit: checkRateLimit, log: console }));
+genieMesh.attachInboundSocket({ io, mesh, pool, log: console });
+
+app.get('/api/comms/status', async (req, res) => {
+  try {
+    if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to view comms status' });
+    const status = await mesh.getStatus();
+    status.telegram = telegram ? telegram.getStatus() : { enabled: false, error: 'TELEGRAM_BOT_TOKEN not set' };
+    res.json({ mesh: status });
+  } catch (e) {
+    res.status(500).json({ error: String(e) });
+  }
+});
+
+app.get('/api/comms/telegram', (req, res) => {
+  if (!telegram) return res.status(501).json({ enabled: false, error: 'TELEGRAM_BOT_TOKEN not set' });
+  res.json({ telegram: telegram.getStatus() });
+});
+
+function detectTailscaleIp() {
+  try {
+    const out = require('child_process').execFileSync('tailscale', ['ip', '-4'], { timeout: 1500, encoding: 'utf8' });
+    return (out || '').trim().split('\n')[0] || null;
+  } catch (e) { return null; }
+}
+
+// Kick off the mesh (seeds the peer row, launches outbound socket + flusher),
+// the AI relay (Free DeepSeek V4 processing loop) and the Telegram tunnel.
+mesh.start().catch(e => console.error('[genie-mesh] failed to start:', e));
+ai.start();
+if (telegram) telegram.start().catch(e => console.error('[telegram] failed to start:', e));
+
+server.listen(PORT, HOST, () => {
+  console.log(`Backend listening on http://${HOST === '0.0.0.0' ? require('os').hostname() : HOST}:${PORT}`);
+  const tsIp = detectTailscaleIp();
+  if (tsIp) console.log(`Tailscale:  http://${tsIp}:${PORT}  (tailnet-only; JARV_GENIE_URL can point here or at your ts.net name)`);
+  if (telegram) console.log('Telegram tunnel: enabled (long-poll, no inbound ports)');
+});
+
+process.on('SIGTERM', () => { mesh.stop(); ai.stop(); if (telegram) telegram.stop(); });
+
+process.on('SIGINT', () => { mesh.stop(); ai.stop(); if (telegram) telegram.stop(); });
 
 const JOB_AGE = parseInt(process.env.JOB_AGE || '3600', 10);
 setInterval(async () => {

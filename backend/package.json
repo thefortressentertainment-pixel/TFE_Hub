@@ -5,7 +5,11 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "migrate": "node migrations/run.js"
+    "migrate": "node migrations/run.js",
+    "smoke:mesh": "node test/mesh-smoke.js",
+    "smoke:ai": "node test/ai-bridge-smoke.js",
+    "smoke": "node test/mesh-smoke.js && node test/ai-bridge-smoke.js && node test/telegram-tunnel-smoke.js",
+    "smoke:telegram": "node test/telegram-tunnel-smoke.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -19,6 +23,7 @@
     "pdfkit": "^0.19.1",
     "pg": "^8.11.0",
     "socket.io": "^4.8.3",
+    "ws": "^8.21.1",
     "zod": "^4.4.3"
   }
 }

@@ -56,6 +56,24 @@ function deductibleMeta(receipt) {
   return { cls: 'tag-personal', label: 'Review', hint: 'Check deductibility — may not qualify.' }
 }
 
+function linkMeta(comms) {
+  if (!comms || !comms.peer) return { label: 'Genie Link standby', tone: 'gray' }
+  const socketOnline = comms.outbound && comms.outbound.socket === true
+  const peer = comms.peer
+  let label, tone
+  if (socketOnline) { label = 'Genie Link online'; tone = 'green' }
+  else if (peer.status === 'reconnecting') { label = 'Genie Link reconnecting'; tone = 'amber' }
+  else { label = 'Genie Link standby'; tone = 'gray' }
+  if (comms.mode === 'satellite') label = `Sat-link · ${label.replace('Genie Link ', '')}`
+  const backlog = comms.outbox && comms.outbox.pending
+  if (backlog > 0) label += ` · queue ${backlog}`
+  if (comms.ai && comms.ai.enabled) {
+    label += ' · DeepSeek ready'
+    if (comms.ai.model && !label.includes(comms.ai.model)) label += ` (${comms.ai.model})`
+  }
+  return { label, tone }
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('fortress_user') || 'null') } catch { return null }
@@ -114,6 +132,8 @@ export default function App() {
 
   const [showSettings, setShowSettings] = useState(false)
   const [theme, setTheme] = useState(() => localStorage.getItem('fortress_theme') || 'light')
+  const [comms, setComms] = useState(null)
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
 
   const toggleTheme = () => {
     setTheme(prev => {
@@ -222,6 +242,28 @@ export default function App() {
     fetchProfileSummaries()
     fetchCategories()
   }, [])
+
+  useEffect(() => {
+    // Genie Link + connectivity status (polls `/api/comms/status` every 30s).
+    if (!user) return
+    const tick = () => {
+      fetch(`${API_BASE}/api/comms/status`)
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error('comms unavailable'))))
+        .then(j => setComms(j.mesh))
+        .catch(() => {})
+    }
+    tick()
+    const t = setInterval(tick, 30000)
+    const goOnline = () => setOnline(true)
+    const goOffline = () => setOnline(false)
+    window.addEventListener('online', goOnline)
+    window.addEventListener('offline', goOffline)
+    return () => {
+      clearInterval(t)
+      window.removeEventListener('online', goOnline)
+      window.removeEventListener('offline', goOffline)
+    }
+  }, [user])
 
   useEffect(() => {
     if (selectedProfile) fetchDailySummary(selectedProfile)
@@ -892,6 +934,12 @@ export default function App() {
         }
         .app-header .user-chip { display: flex; align-items: center; gap: 8px; }
         .app-header .user-email { font-size: 13px; color: var(--text-3); }
+        .link-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; white-space: nowrap; }
+        .link-chip .link-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+        .link-chip .link-dot.green { background: var(--success); box-shadow: 0 0 0 3px rgba(22,163,74,0.16); }
+        .link-chip .link-dot.amber { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,158,11,0.20); }
+        .link-chip .link-dot.gray { background: var(--text-3); }
+        .satline-banner { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; }
         .container { max-width: 1100px; margin: 0 auto; padding: 22px; }
         .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
         .stat-card, .panel-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); transition: box-shadow 0.2s ease; }
@@ -1091,6 +1139,10 @@ export default function App() {
             </div>
             <h1>ReceiptVault</h1>
           </div>
+          <div className="link-chip" title={comms ? `peer: ${comms.peer ? comms.peer.name : '—'} · mode: ${comms.mode || 'terrestrial'} · outbox pending: ${(comms.outbox && comms.outbox.pending) || 0}${comms.ai ? ` · ai: ${comms.ai.enabled ? `${comms.ai.tier === 'free' ? 'free ' : ''}${comms.ai.model || ''}` : 'not configured'}` : ''}` : 'Not connected to an assistant peer yet'}>
+            <span className={`link-dot ${linkMeta(comms).tone}`} />
+            <span>{linkMeta(comms).label}</span>
+          </div>
           <div className="user-chip">
             <span className="user-email">{user.email}</span>
             <button className="btn-sm" onClick={() => setShowSettings(!showSettings)}>
@@ -1100,6 +1152,12 @@ export default function App() {
           </div>
         </header>
         <div className="container">
+          {!online && (
+            <div className="satline-banner" role="status">
+              <span>⚠️</span>
+              <span><strong>You're off-line (or on a spotty satellite/cellular link).</strong> Your changes are held locally and will sync to JARV-Genie automatically when the link returns — nothing is lost.</span>
+            </div>
+          )}
           {showSettings && (
             <div className="panel-card" style={{ marginBottom: 16 }}>
               <h3>Settings</h3>

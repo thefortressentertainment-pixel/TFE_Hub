@@ -11,6 +11,11 @@ const redisUrl = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
 const receiptQueue = new Queue('receipt processing', redisUrl);
 const pool = new Pool({ connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/fortress' });
 
+// Genie Mesh: worker shares its durable outbox so JARV-Genie hears about every
+// processed receipt even over a flaky satellite link. No new deps.
+const genieMesh = require('../../backend/src/genieMesh');
+const mesh = genieMesh.makeMesh({ pool, log: () => {} });
+
 const CATEGORY_KEYWORDS = [
   { keywords: ['starbucks', 'coffee', 'cafe', 'dunkin', 'tim horton'], category: 'Food & Drink' },
   { keywords: ['shell', 'exxon', 'chevron', 'bp', 'gas', 'fuel', '76'], category: 'Fuel' },
@@ -213,6 +218,10 @@ receiptQueue.process(async (job) => {
     console.log('Inserted receipt', receiptId, 'vendor:', vendor, 'total:', total, 'confidence:', confidence);
 
     try {
+      await mesh.emit('receipt.processed', { receiptId, profileId, vendor, total, date, category, confidence, source: 'ocr' });
+    } catch (e) { /* mesh is best-effort; never block receipt processing */ }
+
+    try {
       const http = require('http');
       const hreq = http.get(`http://backend:4002/api/receipts/${receiptId}`, () => {});
       hreq.on('error', () => {});
@@ -253,9 +262,59 @@ receiptQueue.on('completed', (job, result) => {
 });
 receiptQueue.on('failed', (job, err) => console.error('Job failed', job.id, err));
 
-const healthServer = http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end(JSON.stringify({ status: 'ok', role: 'worker' }));
+/**
+ * Health server — reports worker liveness + comms/dependency status.
+ * Over satellite links you can't SSH in, so this endpoint gives operators
+ * a single HTTP probe for DB, Redis, queue, and mesh connectivity.
+ */
+const healthServer = http.createServer(async (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+
+  // Only /health and / are probed by Render/Fly; everything else is 404.
+  const url = new URL(req.url, 'http://localhost').pathname;
+  if (url !== '/health' && url !== '/') {
+    res.writeHead(404);
+    res.end(JSON.stringify({ error: 'Not found' }));
+    return;
+  }
+
+  let dbOk = false;
+  let redisOk = false;
+  let pendingJobs = 0;
+  let meshInfo = null;
+
+  // --- Database liveness (cheap SELECT 1) ---
+  try { await pool.query('SELECT 1'); dbOk = true; } catch (e) { /* down */ }
+
+  // --- Redis / Bull queue liveness ---
+  try {
+    await receiptQueue.isReady();
+    redisOk = true;
+  } catch (e) { /* down */ }
+  try { pendingJobs = await receiptQueue.count(); } catch (e) { /* unknown */ }
+
+  // --- Genie Mesh status (read-only: does NOT create/refresh the peer row) ---
+  try {
+    const { rows } = await pool.query(
+      'SELECT name, status, satlink, last_seen_at FROM genie_peers WHERE name = $1',
+      [mesh.config.peerName]
+    );
+    meshInfo = {
+      enabled: mesh.config.enabled,
+      peerName: mesh.config.peerName,
+      peer: rows[0] || null,
+    };
+  } catch (e) { meshInfo = { enabled: mesh.config.enabled, peer: null }; }
+
+  const ok = dbOk && redisOk;
+  res.writeHead(ok ? 200 : 503);
+  res.end(JSON.stringify({
+    status: ok ? 'ok' : 'degraded',
+    role: 'worker',
+    timestamp: new Date().toISOString(),
+    checks: { database: dbOk, redis: redisOk, queue_pending: pendingJobs },
+    mesh: meshInfo,
+  }));
 });
 const healthPort = process.env.PORT || 10000;
 healthServer.listen(healthPort, () => console.log(`Worker health server on ${healthPort}`));

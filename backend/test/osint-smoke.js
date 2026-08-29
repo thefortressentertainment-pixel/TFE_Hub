@@ -120,7 +120,7 @@ async function main() {
       callSeq.push('turn' + seq);
       if (seq === 0) {
         return { ok: true, reply: '', tool_calls: [
-          { id: 'u1', type: 'function', function: { name: 'jarv_write', arguments: '{"path":"note.txt","content":"approved content"}' } },
+          { id: 'u1', type: 'function', function: { name: 'jarv_write', arguments: '{"path":"tmp/note.txt","content":"approved content"}' } },
         ] };
       }
       return { ok: true, reply: 'Wrote the note.', provider: 'stub', model: 'stub' };

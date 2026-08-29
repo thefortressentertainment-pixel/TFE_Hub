@@ -7,6 +7,7 @@
     "build": "npx vite build"
   },
   "dependencies": {
+    "@babylonjs/core": "^9.23.0",
     "@capacitor-community/background-geolocation": "^1.2.26",
     "@capacitor/android": "^8.5.0",
     "@capacitor/cli": "^8.5.0",

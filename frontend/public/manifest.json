@@ -1,11 +1,11 @@
 {
-  "name": "ReceiptVault",
-  "short_name": "ReceiptVault",
-  "description": "Receipt tracking & business expense manager",
+  "name": "Fortress Hub",
+  "short_name": "Fortress",
+  "description": "Family survival & field intelligence hub — satellite OSINT, location services, and the household ledger",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f6f7f9",
-  "theme_color": "#ffffff",
+  "background_color": "#0b1017",
+  "theme_color": "#0b1017",
   "icons": [
     {
       "src": "/icon-192.png",

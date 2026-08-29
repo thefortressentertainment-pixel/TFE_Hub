@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { io } from 'socket.io-client'
 import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
+import SanctuaryGlobe from './components/SanctuaryGlobe'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? 'https://tfe-hub.onrender.com').replace(/\/+$/, '')
 
@@ -143,6 +144,14 @@ export default function App() {
   const [osintError, setOsintError] = useState('')
   const [osintHandbook, setOsintHandbook] = useState(null)
   const [osintPolicy, setOsintPolicy] = useState(null)
+  const [hubLocation, setHubLocation] = useState(null)
+  const [hubLocSource, setHubLocSource] = useState('no fix')
+  const [locError, setLocError] = useState('')
+  const [manualLat, setManualLat] = useState('')
+  const [manualLon, setManualLon] = useState('')
+  const [globePositions, setGlobePositions] = useState([])
+  const [globeLoading, setGlobeLoading] = useState(false)
+  const [globeError, setGlobeError] = useState('')
 
   const toggleTheme = () => {
     setTheme(prev => {
@@ -314,6 +323,98 @@ export default function App() {
     }
     setOsintLoading(false)
   }
+
+  // ---- Hub location services + sanctuary globe ----
+  const loadHubLocation = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/location`)
+      const j = await r.json()
+      if (j.ok) {
+        setHubLocation({ lat: Number(j.lat), lon: Number(j.lon) })
+        setHubLocSource(j.source || 'hub')
+        return { lat: j.lat, lon: j.lon, source: j.source }
+      }
+      setHubLocation(null)
+      setHubLocSource('no fix')
+      return null
+    } catch (e) {
+      setHubLocation(null)
+      return null
+    }
+  }
+
+  const reportDeviceLocation = async () => {
+    setLocError('')
+    if (!navigator.geolocation) return setLocError('Geolocation is not available on this device')
+    try {
+      const pos = await new Promise((resolve, reject) =>
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000 }))
+      const r = await fetch(`${API_BASE}/api/location/report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy || null }),
+      })
+      const j = await r.json()
+      if (j.ok) {
+        const here = await loadHubLocation()
+        setLocError('')
+        if (here) { setOsintLat(String(here.lat)); setOsintLon(String(here.lon)) }
+        return j
+      }
+      setLocError(j.error || 'position report failed')
+    } catch (e) {
+      if (e && e.code === 1) setLocError('Location permission denied — grant it or set the manual grid.')
+      else setLocError(String((e && e.message) || e))
+    }
+  }
+
+  const setManualGrid = async () => {
+    const lat = Number(manualLat); const lon = Number(manualLon)
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return setLocError('Enter valid latitude and longitude')
+    setLocError('')
+    const r = await fetch(`${API_BASE}/api/location/manual`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon }),
+    })
+    const j = await r.json()
+    if (j.ok) {
+      await loadHubLocation()
+      setOsintLat(String(j.lat)); setOsintLon(String(j.lon))
+      setManualLat(''); setManualLon('')
+    } else {
+      setLocError(j.error || 'manual grid failed')
+    }
+  }
+
+  const useFamilyGrid = async () => {
+    const here = await loadHubLocation()
+    if (here) { setOsintLat(String(here.lat)); setOsintLon(String(here.lon)); setOsintError('') }
+    else setOsintError('No hub location yet — report from this device or set a manual grid.')
+  }
+
+  const loadGlobe = async () => {
+    setGlobeLoading(true)
+    setGlobeError('')
+    try {
+      const r = await fetch(`${API_BASE}/api/osint/globe?satellites=starlink,oneweb,iridium-next,gps`)
+      const j = await r.json()
+      if (j.ok && Array.isArray(j.positions)) setGlobePositions(j.positions)
+      else setGlobeError((j && j.error) || 'globe projection unavailable')
+    } catch (e) {
+      setGlobeError(String(e))
+    }
+    setGlobeLoading(false)
+  }
+
+  useEffect(() => {
+    if (!user) return
+    loadHubLocation()
+    loadGlobe()
+    const t = setInterval(loadGlobe, 60000)
+    return () => clearInterval(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user])
 
   useEffect(() => {
     if (selectedProfile) {
@@ -528,9 +629,9 @@ export default function App() {
 
   const shareShiftSummary = () => {
     if (!lastShiftSummary) return
-    const text = `ReceiptVault — ${lastShiftSummary.purpose}\nMiles: ${lastShiftSummary.miles.toFixed(1)}\nEst. tax deduction: ${money(lastShiftSummary.deduction)}`
+    const text = `Fortress Hub — ${lastShiftSummary.purpose}\nMiles: ${lastShiftSummary.miles.toFixed(1)}\nEst. tax deduction: ${money(lastShiftSummary.deduction)}`
     if (navigator.share) {
-      navigator.share({ title: 'ReceiptVault Shift', text }).catch(() => {})
+      navigator.share({ title: 'Fortress Hub Shift', text }).catch(() => {})
     } else if (navigator.clipboard) {
       navigator.clipboard.writeText(text).then(() => setStatus('Shift summary copied to clipboard'))
     } else {
@@ -906,6 +1007,23 @@ export default function App() {
           --shadow-md: 0 8px 24px rgba(0,0,0,0.4);
           --shadow-lg: 0 20px 44px rgba(0,0,0,0.55);
         }
+        .brand-sub { font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+        .sanctuary-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; margin-bottom: 18px; }
+        .sanctuary-globe { position: relative; width: 100%; height: 420px; min-height: 320px; }
+        .globe-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+        .globe-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+        .globe-overlay button { pointer-events: auto; }
+        .globe-legend { position: absolute; top: 10px; left: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; max-width: 80%; }
+        .legend-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--text-2); background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px; }
+        .legend-chip em { font-style: normal; color: var(--text-3); }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .globe-count { position: absolute; bottom: 10px; left: 12px; font-size: 11px; }
+        .globe-card { position: absolute; right: 12px; bottom: 10px; width: 230px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; padding: 12px; box-shadow: var(--shadow-md); font-size: 12px; pointer-events: auto; }
+        .location-readout { background: var(--surface-2); border: 1px dashed var(--accent-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; }
+        .location-fix { font-weight: 800; font-size: 18px; letter-spacing: 0.01em; }
+        @media (max-width: 900px) {
+          .sanctuary-grid { grid-template-columns: 1fr; }
+        }
         * { box-sizing: border-box; }
         body { margin: 0; background: var(--bg); -webkit-tap-highlight-color: transparent; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
         .auth-screen {
@@ -1121,12 +1239,13 @@ export default function App() {
           <div className="auth-card">
             <div className="auth-logo">
               <svg viewBox="0 0 24 24" fill="none" width="30" height="30">
-                <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
-                <path d="M14 2v4h4M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                <path d="M12 3l7 4v5a9 9 0 0 1-7 9 9 9 0 0 1-7-9V7l7-4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+                <circle cx="12" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.5"/>
+                <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
               </svg>
             </div>
-            <h1>ReceiptVault</h1>
-            <div className="auth-sub">{resetToken ? 'Set a new password' : authMode === 'login' ? 'Welcome back — sign in to your account' : 'Create an account — your receipts, private to you'}</div>
+            <h1>Fortress Hub</h1>
+            <div className="auth-sub">{resetToken ? 'Set a new password' : authMode === 'login' ? 'Welcome back — family grid & field intel' : 'Create the family vault — your data, private to you'}</div>
             {authError && <div className="auth-error">{authError}</div>}
             <label>Email</label>
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
@@ -1179,11 +1298,15 @@ export default function App() {
           <div className="brand">
             <div className="brand-glyph">
               <svg viewBox="0 0 24 24" fill="none" width="22" height="22">
-                <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
-                <path d="M14 2v4h4M9 11h6M9 15h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                <path d="M12 3l7 4v5a9 9 0 0 1-7 9 9 9 0 0 1-7-9V7l7-4z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round"/>
+                <circle cx="12" cy="12" r="2.4" stroke="currentColor" strokeWidth="1.5"/>
+                <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
               </svg>
             </div>
-            <h1>ReceiptVault</h1>
+            <div>
+              <h1 style={{ lineHeight: 1.1 }}>Fortress Hub</h1>
+              <div className="brand-sub">family survival &amp; field intel</div>
+            </div>
           </div>
           <div className="link-chip" title={comms ? `peer: ${comms.peer ? comms.peer.name : '—'} · mode: ${comms.mode || 'terrestrial'} · outbox pending: ${(comms.outbox && comms.outbox.pending) || 0}${comms.ai ? ` · ai: ${comms.ai.enabled ? `${comms.ai.tier === 'free' ? 'free ' : ''}${comms.ai.model || ''}` : 'not configured'}` : ''}` : 'Not connected to an assistant peer yet'}>
             <span className={`link-dot ${linkMeta(comms).tone}`} />
@@ -1220,17 +1343,59 @@ export default function App() {
             </div>
           )}
 
+        <div className="sanctuary-grid">
+          <div className="panel-card">
+            <div className="flex-between" style={{ marginBottom: 6 }}>
+              <h2 style={{ margin: 0, fontSize: 15 }}>Family Grid Fix</h2>
+              <span className={`link-dot ${hubLocation ? 'green' : 'gray'}`} style={{ display: 'inline-block' }} title={hubLocSource} />
+            </div>
+            <div className="muted" style={{ fontSize: 12, marginBottom: 12 }}>
+              Hub-node location services: device fixes, a manual grid, or IP geolocation. JARV pings this live
+              (<code>jarv_location</code>) before every sky scan — so OSINT is computed from where you actually are.
+            </div>
+            {hubLocation ? (
+              <div className="location-readout">
+                <div className="location-fix">{hubLocation.lat.toFixed(4)}°, {hubLocation.lon.toFixed(4)}°</div>
+                <div className="muted">via {hubLocSource}</div>
+              </div>
+            ) : (
+              <div className="muted">No fix yet — report from this device or set a manual grid.</div>
+            )}
+            <div className="flex" style={{ gap: 8, margin: '10px 0' }}>
+              <button className="btn-sm btn-primary" onClick={reportDeviceLocation}>Report my position</button>
+            </div>
+            <div className="flex" style={{ gap: 8, alignItems: 'stretch' }}>
+              <input placeholder="Manual lat" type="number" step="any" value={manualLat} onChange={e => setManualLat(e.target.value)} style={{ width: 110 }} />
+              <input placeholder="Manual lon" type="number" step="any" value={manualLon} onChange={e => setManualLon(e.target.value)} style={{ width: 110 }} />
+              <button className="btn-sm" onClick={setManualGrid}>Set Grid</button>
+            </div>
+            {locError && <div className="status-box" style={{ marginTop: 8, color: '#b42318', background: '#fef3f2', fontSize: 12 }}>{locError}</div>}
+          </div>
+
+          <div className="panel-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div className="flex-between" style={{ padding: '14px 16px 0' }}>
+              <h2 style={{ margin: 0, fontSize: 15 }}>Sanctuary Wire</h2>
+              <button className="btn-sm" onClick={loadGlobe} disabled={globeLoading}>{globeLoading ? 'Projecting…' : 'Refresh Grid'}</button>
+            </div>
+            <div className="muted" style={{ fontSize: 12, padding: '4px 16px 8px' }}>
+              Global OSINT projection — every tracked satellite, positioned live by OrbitDeck.
+            </div>
+            <SanctuaryGlobe positions={globePositions} hubLocation={hubLocation} />
+            {globeError && <div className="status-box" style={{ margin: 10, fontSize: 12 }}>Globe: {globeError}</div>}
+          </div>
+        </div>
+
         <div className="stats-grid">
           <div className="stat-card">
-            <div className="stat-label">Profiles</div>
+            <div className="stat-label">Vaults</div>
             <div className="stat-value">{profileSummaries.length}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Receipts</div>
+            <div className="stat-label">Entry Vaults</div>
             <div className="stat-value">{profileSummaries.reduce((acc, p) => acc + Number(p.receipt_count || 0), 0)}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Spent</div>
+            <div className="stat-label">Allocated</div>
             <div className="stat-value">{money(profileSummaries.reduce((acc, p) => acc + Number(p.total_spent || 0), 0))}</div>
           </div>
           <div className="stat-card">
@@ -1250,7 +1415,7 @@ export default function App() {
           <div className="hero-card" style={{ marginBottom: 16 }}>
             <div className="flex-between" style={{ marginBottom: 12 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>Spending Overview</div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>Ledger Overview</div>
                 <div className="muted">Last 6 months • all profiles</div>
               </div>
               <div style={{ textAlign: 'right' }}>
@@ -1273,7 +1438,7 @@ export default function App() {
 
         <div className="shift-panel" style={{ marginBottom: 16 }}>
           <div className="flex-between" style={{ marginBottom: 10 }}>
-            <h2 style={{ margin: 0, fontSize: 15 }}>Shift Tracker</h2>
+            <h2 style={{ margin: 0, fontSize: 15 }}>Field Ops Tracker</h2>
             {dailySummary && !activeShift && (
               <span className="muted">Today: {money(dailySummary.spend)} • {dailySummary.miles} mi</span>
             )}
@@ -1332,7 +1497,7 @@ export default function App() {
 
         <div className="main-grid">
           <div className="panel-card">
-            <h2>Upload Receipt</h2>
+            <h2>Add Ledger Entry</h2>
             <form onSubmit={uploadReceipt}>
               <div style={{ marginBottom: 10 }}>
                 <label>Profile</label>
@@ -1521,7 +1686,7 @@ export default function App() {
                 <h4 style={{ marginTop: 16 }}>Receipts for Selected Profile</h4>
                 <div style={{ marginBottom: 10 }}>
                   <input
-                    placeholder="Search receipts (vendor, category, notes)..."
+                    placeholder="Search the ledger..."
                     value={searchQuery}
                     onChange={e => setSearchQuery(e.target.value)}
                   />
@@ -1533,8 +1698,8 @@ export default function App() {
                         <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeLinejoin="round"/>
                         <path d="M14 2v4h4M9 11h6M9 15h4" strokeLinecap="round"/>
                       </svg>
-                      <div className="es-title">No receipts yet</div>
-                      <div className="es-sub">Snap your first receipt — it's tax-ready in seconds.</div>
+                      <div className="es-title">Family ledger, empty for now</div>
+                      <div className="es-sub">Snap a receipt or log a supply entry — the vault files it instantly.</div>
                     </div>
                   ) : (
                   dashboardReceipts.filter(r => {
@@ -1589,6 +1754,7 @@ export default function App() {
               )}
               <div className="flex mb-8" style={{ gap: 6 }}>
                 <button className="btn-sm" onClick={loadOsintHandbook}>{osintHandbook ? 'Handbook loaded' : 'Load Handbook'}</button>
+                <button className="btn-sm" onClick={useFamilyGrid} title="Pull the hub's current fix from /api/location into the scan">Use family grid</button>
               </div>
               {osintHandbook && (
                 <div className="status-box" style={{ marginBottom: 10, maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>

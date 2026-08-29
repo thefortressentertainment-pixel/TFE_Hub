@@ -12,3 +12,5 @@ coverage/
 logs/
 *.log
 eng.traineddata
+osint/
+jarv-sandbox/tmp/

@@ -19,12 +19,12 @@
  *  4. LOW BANDWIDTH     Batched sends, compact JSON, optional gzip, and a
  *                       minimal /health-comms endpoint for sat-link clients.
  *
-  * No new npm dependencies beyond the pg Pool the caller already owns: uses
- * Node built-ins (http/https/zlib/crypto) plus `ws` (a lightweight, battle-tested
- * WebSocket client) when the native `WebSocket` global is absent — which it is
- * on Node 20 LTS (node:20-alpine, the Dockerfile / Render / Fly target), so the
- * outbound socket actually works in production, not just on dev machines running
- * Node 23+.
+ *   No new npm dependencies beyond the pg Pool the caller already owns: uses
+ *   Node built-ins (http/https/zlib/crypto) plus `ws` (a lightweight, battle-tested
+ *   WebSocket client) when the native `WebSocket` global is absent — which it is
+ *   on Node 20 LTS (node:20-alpine, the Dockerfile / Render / Fly target), so the
+ *   outbound socket actually works in production, not just on dev machines running
+ *   Node 23+.
  */
 const crypto = require('crypto');
 const zlib = require('zlib');
@@ -471,6 +471,18 @@ function buildExecutor(pool, meshRef) {
       if (!task) throw new Error('task not found');
       return { task };
     },
+
+    // ---- JARV OSINT (satellite comms intelligence, cross-trained) ----
+    'osint.handbook': async (args = {}, ctx = {}) => {
+      if (!ctx.jarv) throw new Error('JARV agent not available');
+      return ctx.jarv.executeTool('jarv_osint_handbook', {});
+    },
+    'osint.satvision': async (args = {}, ctx = {}) => {
+      if (!ctx.jarv) throw new Error('JARV agent not available');
+      const allowed = ['lat', 'lon', 'alt', 'satellites', 'passes', 'min_el', 'overhead', 'footprint'];
+      for (const k of Object.keys(args || {})) if (!allowed.includes(k)) throw new Error(`unknown osint.satvision param: ${k}`);
+      return ctx.jarv.executeTool('jarv_satvision', args);
+    },
   };
 
   // Normalize a prompt/messages into an array for persistent storage.
@@ -484,18 +496,24 @@ function buildExecutor(pool, meshRef) {
     return ai.config.systemPrompt ? [{ role: 'system', content: ai.config.systemPrompt }, ...msg] : msg;
   }
 
-  return async function execute(command, args, ctx = {}) {
+  let currentJarv = meshRef.jarv;
+  function setJarv(j) { currentJarv = j; }
+
+  async function executor(command, args, ctx = {}) {
     const fn = handlers[command];
     if (!fn) throw new Error(`unknown command: ${command}`);
-    return fn(args, ctx);
-  };
+    return fn(args, { ...ctx, jarv: currentJarv });
+  }
+
+  executor.setJarv = setJarv;
+  return executor;
 }
 exports.buildExecutor = buildExecutor;
 /* ------------------------------------------------------------------ *
  * makeMesh — the main controller: peer seeding, durability helpers, the
  * persistent outbound WebSocket link, and the HTTPS fallback flusher.
  * ------------------------------------------------------------------ */
-function makeMesh({ pool, log, config = {}, ai = null }) {
+function makeMesh({ pool, log, config = {}, ai = null, jarv = null }) {
   const cfg = {
     enabled: envBool(config.enabled != null ? config.enabled : process.env.GENIE_MESH_ENABLED, true),
     peerName: config.peerName || DEFAULT_PEER_NAME,
@@ -535,8 +553,11 @@ function makeMesh({ pool, log, config = {}, ai = null }) {
     flusherTimer: null,
     pumpTimer: null,
     ai: ai,
+    jarv: null,
   };
-  const executor = buildExecutor(pool, { getStatus: () => getStatus(), ai: state.ai });
+  const executor = buildExecutor(pool, { getStatus: () => getStatus(), ai: state.ai, jarv: state.jarv });
+
+  function setJarv(j) { state.jarv = j; executor.setJarv(j); }
 
   async function refreshDefaultPeer() {
     if (!cfg.enabled) { state.defaultPeer = null; return null; }
@@ -746,7 +767,7 @@ function makeMesh({ pool, log, config = {}, ai = null }) {
           break;
       }
     }
-async function flushLoop() {
+    async function flushLoop() {
       if (!state.connected || state.stopped) return;
       if (state.pendingBatch) return; // one in-flight batch at a time
       const peer = state.defaultPeer;
@@ -913,6 +934,7 @@ async function flushLoop() {
     listPeers: () => listPeers(pool),
     ai: state.ai,
     config: cfg,
+    setJarv,
   };
 }
 
@@ -984,6 +1006,15 @@ function createGenieApi({ pool, mesh, rateLimit, log }) {
     router.post('/ai/task', (req, res) => void runAs(req, res, 'ai.task', req.body || {}));
     router.get('/ai/task/:id', (req, res) => void runAs(req, res, 'ai.result.get', { id: req.params.id }));
   }
+
+  // ---- JARV OSINT (satellite comms intelligence over the mesh) ----
+  router.get('/osint/handbook', (req, res) => void runAs(req, res, 'osint.handbook', {}));
+  router.get('/osint/satvision', (req, res) => void runAs(req, res, 'osint.satvision', {
+    lat: req.query.lat, lon: req.query.lon, alt: req.query.alt,
+    satellites: req.query.satellites, passes: req.query.passes,
+    min_el: req.query.min_el, overhead: req.query.overhead, footprint: req.query.footprint,
+  }));
+  router.post('/osint/satvision', (req, res) => void runAs(req, res, 'osint.satvision', req.body || {}));
 
     // Pull-mode delivery: the peer fetches pending outbox events over REST
   // (satellite-friendly: works with high delay, tiny round-trips), then acks.

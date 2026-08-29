@@ -32,7 +32,7 @@ const genieMesh = require('./genieMesh');
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 function nowIso() { return new Date().toISOString(); }
 
-function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
+function makeTelegramTunnel({ pool, mesh, log, config = {}, jarv = null } = {}) {
   // Accept a plain fn, a console-like logger ({info}), or nothing.
   const logFn = typeof log === 'function' ? log : (log && typeof log.info === 'function' ? log.info.bind(log) : () => {});
   const token = config.TELEGRAM_BOT_TOKEN || '';
@@ -87,7 +87,7 @@ function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
         } else {
           res = new Promise((resolve, reject) => {
             const u = new URL(url);
-            const req = httpsRequest(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, agent, timeout: (cfg.pollSeconds + 15) * 1000 }, (r) => {
+            const req = require('https').request(u, { method: 'POST', headers: { 'Content-Type': 'application/json' }, agent, timeout: (cfg.pollSeconds + 15) * 1000 }, (r) => {
               let data = '';
               r.on('data', (c) => { data += c; });
               r.on('end', () => { try { resolve({ ok: true, status: r.statusCode, json: () => JSON.parse(data || '{}') }); } catch (e) { reject(e); } });
@@ -100,28 +100,20 @@ function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
         const r = await res;
         if (!r.ok && (r.status === 429 || r.status >= 500)) throw new Error(`telegram ${r.status}`);
         return r.json();
-        // fetch keepalive agent is 4.17-compatible
       } catch (e) {
         if (e && e.name === 'AbortError') throw e;
         state.lastError = e.message;
         if (attempt === 3) throw e;
         await new Promise((r) => setTimeout(r, attempt * 2000));
       }
+    }
   }
-  }
-  // Shadow used by the fallback branch (declared after use is fine — hoisted).
-  const httpsRequest = require('https').request;
-  agent; // keepAlive agent shared for long-poll + sends
-
-  // Alias kept for readability at call sites; identical semantics to tgApi.
-  const tgApi1 = (method, body) => tgApi(method, body);
-  // All send-side calls go through tgApi1 (identical semantics to tgApi).
   // Long replies are split with chunk() — the Bot API rejects >4096 chars.
   const sendMessage = async (chatId, text) => {
     const parts = chunk(text, cfg.maxChars);
     for (const part of parts) {
       try {
-        await tgApi1('sendMessage', {
+        await tgApi('sendMessage', {
           chat_id: chatId, text: part, parse_mode: 'HTML', disable_web_page_preview: true,
         });
         state.sent++;
@@ -135,9 +127,10 @@ function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
     { command: 'prompt', description: 'Quick AI prompt (sync)' },
     { command: 'peer', description: 'Peer roster' },
     { command: 'where', description: 'How to reach the hub (tailscale/public)' },
+    { command: 'osint', description: 'Satellite OSINT: /osint.handbook or /osint.satvision {"lat":..,"lon":..,"satellites":"starlink","overhead":true}' },
   ];
   function commandList() { return BotCmds; }
-  const setMyCommands = () => tgApi1('setMyCommands', { commands: BotCmds }).catch(() => {});
+  const setMyCommands = () => tgApi('setMyCommands', { commands: BotCmds }).catch(() => {});
 
   const HELP = [
     '<b>JARV-Genie tunnel</b>',
@@ -146,6 +139,8 @@ function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
     '/prompt &lt;text&gt; — quick AI completion',
     '/peer — mesh peer roster',
     '/where — all reachable hub endpoints',
+    '/osint.handbook — your satellite-comms OSINT cross-training doc',
+    '/osint.satvision {"lat":40.4,"lon":-3.65,"overhead":true,"satellites":"starlink,oneweb,iridium-next"} — live satellite intelligence',
     'Free text — chat with JARV-Genie',
   ].join('\n');
 
@@ -175,6 +170,8 @@ function makeTelegramTunnel({ pool, mesh, log, config = {} } = {}) {
     'ai.status': { args: [], handler: () => mesh.getStatus().then((s) => s.ai) },
     'ai.task': { args: ['prompt', 'options?'], handler: (args, peerId) => mesh.executor('ai.task', args, { peerId }) },
     'ai.result.get': { args: ['id'], handler: (args, peerId) => mesh.executor('ai.result.get', args, { peerId }) },
+    'osint.handbook': { args: [], handler: (args, peerId) => mesh.executor('osint.handbook', args, { peerId }) },
+    'osint.satvision': { args: ['lat', 'lon', 'satellites?', 'overhead?', 'footprint?'], handler: (args, peerId) => mesh.executor('osint.satvision', args, { peerId }) },
   };
   async function execCommand(command, args, chatId) {
     const peer = await ensurePeerAndSession();

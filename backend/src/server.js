@@ -105,10 +105,13 @@ const genieMesh = require('./genieMesh');
 const aiBridge = require('./aiBridge');
 const ai = aiBridge.makeAiBridge({ pool, log: console, config: process.env, getMesh: () => mesh });
 const mesh = genieMesh.makeMesh({ pool, log: console, ai });
+const jarvAgent = require('./jarvAgent');
+const jarv = jarvAgent.makeJarvAgent({ pool, mesh, ai, log: console });
+mesh.setJarv(jarv);
 // Telegram tunnel — outbound-only command channel (long-poll, zero inbound
 // ports) so JARV-Genie keeps an always-available path behind CGNAT/satellite.
 const telegramTunnel = require('./telegramTunnel');
-const telegram = telegramTunnel.makeTelegramTunnel({ pool, mesh, log: console, config: process.env });
+const telegram = telegramTunnel.makeTelegramTunnel({ pool, mesh, log: console, config: process.env, jarv });
 
 io.on('connection', socket => {
   socket.on('subscribe:profile', profileId => {

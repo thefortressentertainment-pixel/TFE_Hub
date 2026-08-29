@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { io } from 'socket.io-client'
 import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
 
-const API_BASE = 'https://tfe-hub.onrender.com'
+const API_BASE = (import.meta.env.VITE_API_BASE ?? 'https://tfe-hub.onrender.com').replace(/\/+$/, '')
 
 function getDeviceId() {
   let id = localStorage.getItem('fortress_device_id')

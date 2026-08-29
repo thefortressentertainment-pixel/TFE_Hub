@@ -998,6 +998,11 @@ app.get('/api/osint/handbook', async (req, res) => {
     res.json({ handbook: out.content, source: out.source });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+app.get('/api/osint/policy', async (req, res) => {
+  try {
+    res.json(jarv.getPolicy ? jarv.getPolicy() : { error: 'policy unavailable' });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
 app.get('/api/osint/satvision', async (req, res) => {
   try {
     const args = {};

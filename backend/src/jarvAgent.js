@@ -37,7 +37,48 @@ const BLOCKED_PATTERNS = [
   /;\s*rm\b/, /\|\s*sh\b/, />\s*\//, /\bsudo\b/, /\bchmod\s+[47]77\b/,
 ];
 
+/**
+ * JARV Safety Policy — autonomous tool-use risk tiers.
+ *
+ *  safeTools    : run without approval in any conversation (read-only or
+ *                 fixed-script outputs; no arbitrary code, no state change).
+ *  confirmTools : mutate files or run free-form shell — these are REFUSED in
+ *                 autonomous (model-driven) conversations unless the operator
+ *                 explicitly approved them for that invocation.
+ *
+ * Autonomous `jarv_run` always runs under a stripped allowlist (no curl/wget)
+ * and a scrubbed environment {PATH,HOME,TZ} so secrets from the host env can
+ * never leak into a subprocess the model drives.
+ */
+const SAFE_TOOLS = new Set(['jarv_read', 'jarv_list', 'jarv_osint_handbook', 'jarv_satvision']);
+const CONFIRM_TOOLS = new Set(['jarv_run', 'jarv_write', 'jarv_edit']);
+const AUTONOMOUS_SHELL_ALLOWLIST = DEFAULT_ALLOWLIST.filter((e) => e.bin !== 'curl' && e.bin !== 'wget');
+const MIN_ENV = {
+  PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+  HOME: process.env.HOME || '/tmp',
+  TZ: process.env.TZ || 'UTC',
+};
+
+const JARV_SYSTEM_PROMPT = [
+  'You are JARV, the Fortress Hub operations agent for satellite-comms OSINT and hub continuity.',
+  'Ground rules:',
+  '- Use tools only when they genuinely help. Prefer direct answers. Never invent tool results.',
+  '- OSINT work is done through jarv_satvision (fixed script) and the handbook. Keep queries bounded.',
+  '- jarv_read / jarv_list inspect the sandbox only. Never request files outside it.',
+  '- Tools like jarv_run / jarv_write / jarv_edit are BLOCKED for autonomous use by policy. If the',
+  '  operator did not enable them for this conversation, answer honestly: say you need operator',
+  '  approval for that action, and suggest the data you would need instead.',
+  '- If a tool result carries JARV_POLICY_BLOCK, do not retry; respond to the human.',
+  '- Never output secrets, keys, connection strings, or personal data you are not asked about.',
+  '- If you do not know, say so. If data is stale or demo (epoch-stamped), flag it as such.',
+].join('\n');
+
 function isBlocked(cmd) { return BLOCKED_PATTERNS.some((re) => re.test(cmd)); }
+
+function trunc(s, n) {
+  const t = String(s);
+  return t.length > n ? t.slice(0, n - 1) + '…' : t;
+}
 
 function checkAllowlist(cmd, allowlist) {
   const parts = cmd.trim().split(/\s+/);
@@ -90,7 +131,7 @@ function fileEdit(filePath, search, replace, sandboxRoot) {
   return writeFile(filePath, r.content.split(search).join(replace), sandboxRoot);
 }
 
-function execAllowlist(cmd, { sandboxRoot, allowlist, timeout = 15000, maxOutput = 20000 } = {}) {
+function execAllowlist(cmd, { sandboxRoot, allowlist, timeout = 15000, maxOutput = 20000, env } = {}) {
   return new Promise((resolve) => {
     const check = checkAllowlist(cmd, allowlist || DEFAULT_ALLOWLIST);
     if (!check.ok) return resolve({ ok: false, error: check.reason });
@@ -99,7 +140,7 @@ function execAllowlist(cmd, { sandboxRoot, allowlist, timeout = 15000, maxOutput
       cwd: resolveSandbox(sandboxRoot),
       timeout,
       maxBuffer: maxOutput,
-      env: { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin' },
+      env: env || { ...process.env, PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin' },
     });
     let stdout = '';
     let stderr = '';
@@ -179,10 +220,17 @@ function readHandbook(sandbox) {
   return { ok: false, error: 'OSINT handbook missing (expected jarv-sandbox/OSINT_HANDBOOK.md)' };
 }
 
-function makeJarvAgent({ pool, mesh, ai, log }) {
+function makeJarvAgent({ pool, mesh, ai, log, safety = {} }) {
   const logFn = typeof log === 'function' ? log : (log && typeof log.info === 'function' ? log.info.bind(log) : () => {});
   const sandboxRoot = resolveSandbox();
   fs.mkdirSync(sandboxRoot, { recursive: true });
+
+  const policy = {
+    safeTools: [...SAFE_TOOLS],
+    confirmTools: [...CONFIRM_TOOLS],
+    autonomousShell: !!(safety.autonomousShell || process.env.JARV_AUTONOMOUS_SHELL === '1'),
+    autonomousNet: !!(safety.autonomousNet || process.env.JARV_AUTONOMOUS_NET === '1'),
+  };
 
   const tools = getToolDefs();
 
@@ -193,50 +241,106 @@ function makeJarvAgent({ pool, mesh, ai, log }) {
   }
 
   async function getCapabilities() {
-    return { tools, sandboxRoot };
+    return { tools, sandboxRoot, policy };
+  }
+
+  /** Risk-gated dispatch for MODEL-driven (autonomous) tool calls in ask(). */
+  async function runAutonomous(name, args, { allowShell, allowNet }) {
+    try {
+      if (name === 'jarv_run') {
+        if (!allowShell) return { ok: false, error: 'JARV_POLICY_BLOCK: jarv_run is disabled for autonomous use in this session. The operator must approve shell access.' };
+        if (isBlocked(args.command || '')) return { ok: false, error: 'JARV_POLICY_BLOCK: command blocked by JARV safety blocklist' };
+        const allowlist = allowNet ? DEFAULT_ALLOWLIST : AUTONOMOUS_SHELL_ALLOWLIST;
+        const check = checkAllowlist(args.command || '', allowlist);
+        if (!check.ok) {
+          if (/curl|wget/.test(String(args.command).split(/\s+/)[0])) {
+            return { ok: false, error: `JARV_POLICY_BLOCK: network commands are disabled without operator approval (allowNet): ${check.reason}` };
+          }
+          return { ok: false, error: `JARV_POLICY_BLOCK: ${check.reason}` };
+        }
+        return execAllowlist(args.command, { sandboxRoot, allowlist, env: MIN_ENV });
+      }
+      if (name === 'jarv_write' || name === 'jarv_edit') {
+        // Unlocked by the operator for this session; still confined to sandbox.
+        return dispatchTool(name, args, { sandboxRoot });
+      }
+      return dispatchTool(name, args, { sandboxRoot });
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e) };
+    }
   }
 
   /**
    * JARV's conversational brain over the toolchain: run an OpenAI-compatible
    * function-calling loop against the AI relay so JARV can autonomously read
    * the OSINT handbook and query satellites mid-conversation.
-   * Returns a final answer, or the last model turn if the loop hits maxTurns.
+   *
+   * Safety: model-driven tool calls are gated by the JARV Safety Policy.
+   *   opts.unlock    : tool names the OPERATOR approved for this conversation
+   *                    (must be a known jarv_* tool; everything else is refused).
+   *   opts.allowShell: additionally allow jarv_run in this conversation.
+   *   opts.allowNet  : allow curl/wget inside jarv_run (default: off).
+   * Every tool call (including refusals) is logged.
    */
   async function ask(input, opts = {}) {
     if (!ai || typeof ai.complete !== 'function') {
       throw new Error('JARV ask() requires the AI relay (aiBridge)');
     }
+    const known = new Set(getToolDefs().map((t) => t.name));
+    const unlock = new Set((opts.unlock || []).filter((n) => known.has(n)));
+    const allowShell = policy.autonomousShell || opts.allowShell === true;
+    const allowNet = policy.autonomousNet || opts.allowNet === true;
     const tools = getOpenAITools();
     const maxTurns = Math.min(Number(opts.maxToolTurns) || 6, 10);
     const messages = Array.isArray(input) ? input.slice() : [{ role: 'user', content: String(input || '') }];
+    messages.unshift({ role: 'system', content: JARV_SYSTEM_PROMPT });
     const toolCallsMade = [];
+    const blocked = [];
     for (let turn = 0; turn <= maxTurns; turn++) {
       const out = await ai.complete({ messages, tools, tool_choice: opts.tool_choice || 'auto', max_tokens: opts.max_tokens, model: opts.model });
       const calls = out.tool_calls || [];
       if (!calls.length || turn === maxTurns) {
         return {
           ok: true, reply: out.reply, provider: out.provider, model: out.model,
-          turns: turn + 1, toolCalls: toolCallsMade, tool_calls: calls,
+          turns: turn + 1, toolCalls: toolCallsMade, blocked,
+          tool_calls: calls,
         };
       }
       const assistantMsg = { role: 'assistant', content: out.reply || null, tool_calls: calls };
       messages.push(assistantMsg);
       for (const tc of calls) {
+        const name = tc.function && tc.function.name;
         let argsObj = {};
         if (tc.function && tc.function.arguments) {
           try { argsObj = JSON.parse(tc.function.arguments); } catch (e) { argsObj = { raw: tc.function.arguments }; }
         }
         let res;
-        try { res = await executeTool(tc.function.name, argsObj); }
-        catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
-        toolCallsMade.push({ name: tc.function.name, args: argsObj, result: summaryOf(res) });
+        if (!known.has(name)) {
+          res = { ok: false, error: 'JARV_POLICY_BLOCK: unknown tool' };
+        } else if (!SAFE_TOOLS.has(name) && !unlock.has(name)) {
+          blocked.push({ name, args: argsObj, reason: 'requires-operator-approval' });
+          res = { ok: false, error: `JARV_POLICY_BLOCK: ${name} is disabled for autonomous use. Tell the operator it needs explicit approval in the request, or answer without it.` };
+        } else {
+          res = await runAutonomous(name, argsObj, { allowShell, allowNet });
+          if (res && !res.ok && /JARV_POLICY_BLOCK/.test(res.error || '')) blocked.push({ name, args: argsObj, reason: res.error.slice(0, 160) });
+        }
+        logFn(`[jarv] ask tool=${name} args=${trunc(JSON.stringify(argsObj), 200)} -> ${res && (res.ok ? 'ok' : 'error')}`);
+        toolCallsMade.push({ name, args: argsObj, result: summaryOf(res) });
         messages.push({
-          role: 'tool', tool_call_id: tc.id, name: tc.function.name,
+          role: 'tool', tool_call_id: tc.id, name,
           content: JSON.stringify(res).slice(0, 8000),
         });
       }
     }
-    return { ok: true, reply: 'Maximum tool rounds reached.', turns: maxTurns + 1, toolCalls: toolCallsMade };
+    return { ok: true, reply: 'Maximum tool rounds reached.', turns: maxTurns + 1, toolCalls: toolCallsMade, blocked };
+  }
+
+  function getPolicy() {
+    return {
+      safety: policy,
+      sandbox: sandboxRoot,
+      autonomous: 'model-driven tool calls are gated; jarv_run requires operator approval and runs with a stripped allowlist + scrubbed env',
+    };
   }
 
   /** Compact view of a tool result so the model gets the essence, not megabytes. */
@@ -257,6 +361,7 @@ function makeJarvAgent({ pool, mesh, ai, log }) {
     getToolDefs,
     getOpenAITools,
     ask,
+    getPolicy,
     dispatchTool,
     readFile: (p) => readFile(p, sandboxRoot),
     writeFile: (p, c) => writeFile(p, c, sandboxRoot),
@@ -273,5 +378,6 @@ module.exports = {
   readFile, writeFile, listDir, fileEdit, execAllowlist,
   getToolDefs, getOpenAITools, dispatchTool, checkAllowlist, isBlocked,
   DEFAULT_ALLOWLIST, BLOCKED_PATTERNS, resolveSandbox,
+  SAFE_TOOLS, CONFIRM_TOOLS, AUTONOMOUS_SHELL_ALLOWLIST, JARV_SYSTEM_PROMPT,
   makeJarvAgent,
 };

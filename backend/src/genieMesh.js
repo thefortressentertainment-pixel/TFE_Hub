@@ -486,12 +486,22 @@ function buildExecutor(pool, meshRef) {
 
     // Full JARV chat: AI tool-use loop so JARV answers using its tools
     // (OSINT handbook, jarv_satvision, sandbox read/write/run) mid-conversation.
+    // Safety: model-driven tools are risk-gated by JARV policy. jarv_run /
+    // jarv_write / jarv_edit only run when the OPERATOR passes them in
+    // `unlock` for the request; network access inside jarv_run needs
+    // `allowNet: true`.
     'jarv.ask': async (args = {}, ctx = {}) => {
       if (!ctx.jarv) throw new Error('JARV agent not available');
       const text = args.prompt != null ? String(args.prompt) : null;
       if (text == null && !Array.isArray(args.messages)) throw new Error('prompt or messages required');
+      const knownTools = (ctx.jarv.getToolDefs ? ctx.jarv.getToolDefs() : []).map((t) => t.name);
+      const unlock = Array.isArray(args.unlock) ? args.unlock : [];
+      for (const n of unlock) {
+        if (typeof n !== 'string' || !knownTools.includes(n)) throw new Error(`unknown unlock tool: ${n}`);
+      }
       return ctx.jarv.ask(text != null ? text : args.messages, {
         maxToolTurns: args.maxToolTurns, model: args.model, max_tokens: args.max_tokens,
+        unlock, allowShell: args.allowShell === true, allowNet: args.allowNet === true,
       });
     },
   };

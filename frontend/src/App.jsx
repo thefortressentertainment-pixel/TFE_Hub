@@ -142,6 +142,7 @@ export default function App() {
   const [osintLoading, setOsintLoading] = useState(false)
   const [osintError, setOsintError] = useState('')
   const [osintHandbook, setOsintHandbook] = useState(null)
+  const [osintPolicy, setOsintPolicy] = useState(null)
 
   const toggleTheme = () => {
     setTheme(prev => {
@@ -287,6 +288,13 @@ export default function App() {
     } catch (e) {
       setOsintError('Handbook: ' + String(e))
     }
+  }
+  const loadOsintPolicy = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/osint/policy`)
+      const j = await r.json()
+      if (r.ok) setOsintPolicy(j)
+    } catch (e) { /* non-fatal */ }
   }
   const runOsintSatvision = async () => {
     if (!osintLat || !osintLon) return setOsintError('Enter latitude and longitude')
@@ -1565,13 +1573,20 @@ export default function App() {
         <div className="panel-card" style={{ marginBottom: 16 }}>
           <div className="flex-between" style={{ marginBottom: 4 }}>
             <h2 style={{ margin: 0, fontSize: 15 }}>OSINT — Satellite Comms Intelligence</h2>
-            <button onClick={() => setOsintShow(s => !s)}>{osintShow ? 'Hide' : 'Open'}</button>
+            <button onClick={() => setOsintShow(s => { if (!s) loadOsintPolicy(); return !s })}>{osintShow ? 'Hide' : 'Open'}</button>
           </div>
           {osintShow && (
             <div>
               <div className="muted" style={{ marginBottom: 10 }}>
                 Live satcom vision via OrbitDeck (JARV cross-trained). Query overhead satellites, passes and coverage footprints.
               </div>
+              {osintPolicy && osintPolicy.safety && (
+                <div className="status-box" style={{ marginBottom: 10, fontSize: 12 }}>
+                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Guardrails (autonomous JARV calls)</div>
+                  <div className="muted">Always on: {(osintPolicy.safety.safeTools || []).join(', ')}</div>
+                  <div className="muted">Require operator approval: {(osintPolicy.safety.confirmTools || []).join(', ')} {osintPolicy.safety.autonomousShell ? '(shell ON)' : ''} {osintPolicy.safety.autonomousNet ? '(network ON)' : ''}</div>
+                </div>
+              )}
               <div className="flex mb-8" style={{ gap: 6 }}>
                 <button className="btn-sm" onClick={loadOsintHandbook}>{osintHandbook ? 'Handbook loaded' : 'Load Handbook'}</button>
               </div>

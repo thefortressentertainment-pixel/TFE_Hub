@@ -12,6 +12,7 @@ const express = require('express');
 const genieMesh = require('../src/genieMesh');
 const aiBridge = require('../src/aiBridge');
 const telegramTunnel = require('../src/telegramTunnel');
+const jarvAgent = require('../src/jarvAgent');
 
 let failed = 0;
 function check(name, cond, extra) {
@@ -226,6 +227,10 @@ async function main() {
   });
   await mesh.start();
 
+  console.log('[2b] Wire JARV into the mesh (free text = JARV tool-use chat)');
+  const jarv = jarvAgent.makeJarvAgent({ pool: stub, ai, mesh, log: () => {} });
+  mesh.setJarv(jarv);
+
   console.log('[3] REST gateway smoke (/health-comms + AI endpoints)');
   const app = express();
   app.use(express.json());
@@ -279,7 +284,7 @@ async function main() {
 
   await feed('hello genie', CHAT);
   const chatMsg = sent.filter((x) => x.chat_id === CHAT).pop();
-  check('free text → AI relay reply', !!chatMsg && chatMsg.text.includes('pong from deepseek-chat'), chatMsg && chatMsg.text);
+  check('free text → JARV tool-use chat (AI relay reply)', !!chatMsg && chatMsg.text.includes('pong from deepseek-chat'), chatMsg && chatMsg.text);
 
   await feed('/status', CHAT);
   const stMsg = sent.filter((x) => x.chat_id === CHAT).pop();

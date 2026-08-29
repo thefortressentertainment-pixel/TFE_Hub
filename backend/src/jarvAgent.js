@@ -124,6 +124,23 @@ function getToolDefs() {
   ];
 }
 
+/**
+ * OpenAI function-calling schema for JARV's tools. Lets the AI relay offer
+ * tools to any compatible model, so JARV can autonomously read the OSINT
+ * handbook and run satellite queries mid-conversation.
+ */
+function getOpenAITools() {
+  return [
+    { type: 'function', function: { name: 'jarv_read', description: 'Read a file from the JARV sandbox. Returns content or an error object.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'relative path to the file' } }, required: ['path'] } } },
+    { type: 'function', function: { name: 'jarv_write', description: 'Write content to a file in the JARV sandbox. Creates parent dirs, overwrites.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
+    { type: 'function', function: { name: 'jarv_list', description: 'List files/directories in a sandbox path.', parameters: { type: 'object', properties: { path: { type: 'string', description: 'relative path (optional, default root)' } } } } },
+    { type: 'function', function: { name: 'jarv_run', description: 'Run a constrained shell command (allowlisted bins: cat, ls, grep, python3, node, git, curl, jq, ...). Blocked: rm/sudo/chained destructive.', parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } } },
+    { type: 'function', function: { name: 'jarv_edit', description: 'Replace all occurrences of a search string in a sandbox file.', parameters: { type: 'object', properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } }, required: ['path', 'search', 'replace'] } } },
+    { type: 'function', function: { name: 'jarv_satvision', description: 'Satellite communications OSINT. Live query of overhead satellites, pass predictions, and Earth coverage footprints for Starlink/OneWeb/Iridium/GPS/Galileo/etc via OrbitDeck + CelesTrak. Returns JSON.', parameters: { type: 'object', properties: { lat: { type: 'number', description: 'observer latitude decimal degrees' }, lon: { type: 'number', description: 'observer longitude decimal degrees' }, alt: { type: 'number', description: 'observer altitude meters (default 10)' }, satellites: { type: 'string', description: 'comma-separated groups: starlink,oneweb,iridium-next,globalstar,gps,galileo,glonass,beidou,geo (default starlink,oneweb,iridium-next,gps)' }, passes: { type: 'number', description: 'max passes per satellite (default 3)' }, min_el: { type: 'number', description: 'minimum elevation degrees (default 10)' }, overhead: { type: 'boolean', description: 'include satellites currently above the horizon' }, footprint: { type: 'boolean', description: 'include Earth coverage footprints' } }, required: ['lat', 'lon'] } } },
+    { type: 'function', function: { name: 'jarv_osint_handbook', description: 'Read your satellite-comms OSINT cross-training document. Consult this before answering OSINT/coverage questions.', parameters: { type: 'object', properties: {} } } },
+  ];
+}
+
 function dispatchTool(name, args, ctx) {
   const sandbox = ctx.sandboxRoot || process.cwd();
   switch (name) {
@@ -141,8 +158,10 @@ function dispatchTool(name, args, ctx) {
 async function execSatVision(args, sandbox) {
   const scriptPath = path.resolve(__dirname, '..', 'jarv-satvision.py');
   const cmdArgs = ['python3', scriptPath, '--json'];
-  if (args.lat != null) cmdArgs.push('--lat', String(args.lat));
-  if (args.lon != null) cmdArgs.push('--lon', String(args.lon));
+  const lat = args.lat != null ? args.lat : process.env.JARV_DEFAULT_LAT;
+  const lon = args.lon != null ? args.lon : process.env.JARV_DEFAULT_LON;
+  if (lat != null) cmdArgs.push('--lat', String(lat));
+  if (lon != null) cmdArgs.push('--lon', String(lon));
   if (args.alt != null) cmdArgs.push('--alt', String(args.alt));
   if (args.satellites) cmdArgs.push('--satellites', String(args.satellites));
   if (args.passes != null) cmdArgs.push('--passes', String(args.passes));
@@ -177,10 +196,67 @@ function makeJarvAgent({ pool, mesh, ai, log }) {
     return { tools, sandboxRoot };
   }
 
+  /**
+   * JARV's conversational brain over the toolchain: run an OpenAI-compatible
+   * function-calling loop against the AI relay so JARV can autonomously read
+   * the OSINT handbook and query satellites mid-conversation.
+   * Returns a final answer, or the last model turn if the loop hits maxTurns.
+   */
+  async function ask(input, opts = {}) {
+    if (!ai || typeof ai.complete !== 'function') {
+      throw new Error('JARV ask() requires the AI relay (aiBridge)');
+    }
+    const tools = getOpenAITools();
+    const maxTurns = Math.min(Number(opts.maxToolTurns) || 6, 10);
+    const messages = Array.isArray(input) ? input.slice() : [{ role: 'user', content: String(input || '') }];
+    const toolCallsMade = [];
+    for (let turn = 0; turn <= maxTurns; turn++) {
+      const out = await ai.complete({ messages, tools, tool_choice: opts.tool_choice || 'auto', max_tokens: opts.max_tokens, model: opts.model });
+      const calls = out.tool_calls || [];
+      if (!calls.length || turn === maxTurns) {
+        return {
+          ok: true, reply: out.reply, provider: out.provider, model: out.model,
+          turns: turn + 1, toolCalls: toolCallsMade, tool_calls: calls,
+        };
+      }
+      const assistantMsg = { role: 'assistant', content: out.reply || null, tool_calls: calls };
+      messages.push(assistantMsg);
+      for (const tc of calls) {
+        let argsObj = {};
+        if (tc.function && tc.function.arguments) {
+          try { argsObj = JSON.parse(tc.function.arguments); } catch (e) { argsObj = { raw: tc.function.arguments }; }
+        }
+        let res;
+        try { res = await executeTool(tc.function.name, argsObj); }
+        catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+        toolCallsMade.push({ name: tc.function.name, args: argsObj, result: summaryOf(res) });
+        messages.push({
+          role: 'tool', tool_call_id: tc.id, name: tc.function.name,
+          content: JSON.stringify(res).slice(0, 8000),
+        });
+      }
+    }
+    return { ok: true, reply: 'Maximum tool rounds reached.', turns: maxTurns + 1, toolCalls: toolCallsMade };
+  }
+
+  /** Compact view of a tool result so the model gets the essence, not megabytes. */
+  function summaryOf(res) {
+    if (res && res.ok && typeof res.stdout === 'string') {
+      return { ok: true, exitCode: res.exitCode, output: res.stdout.slice(0, 4000) };
+    }
+    if (res && res.ok && typeof res.content === 'string') {
+      return { ok: true, content: res.content.slice(0, 4000) };
+    }
+    if (res && typeof res.entries === 'object') return { ok: true, entries: res.entries, path: res.path };
+    return res;
+  }
+
   return {
     executeTool,
     getCapabilities,
     getToolDefs,
+    getOpenAITools,
+    ask,
     dispatchTool,
     readFile: (p) => readFile(p, sandboxRoot),
     writeFile: (p, c) => writeFile(p, c, sandboxRoot),
@@ -195,7 +271,7 @@ function makeJarvAgent({ pool, mesh, ai, log }) {
 
 module.exports = {
   readFile, writeFile, listDir, fileEdit, execAllowlist,
-  getToolDefs, dispatchTool, checkAllowlist, isBlocked,
+  getToolDefs, getOpenAITools, dispatchTool, checkAllowlist, isBlocked,
   DEFAULT_ALLOWLIST, BLOCKED_PATTERNS, resolveSandbox,
   makeJarvAgent,
 };

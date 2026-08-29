@@ -141,7 +141,8 @@ function makeTelegramTunnel({ pool, mesh, log, config = {}, jarv = null } = {}) 
     '/where — all reachable hub endpoints',
     '/osint.handbook — your satellite-comms OSINT cross-training doc',
     '/osint.satvision {"lat":40.4,"lon":-3.65,"overhead":true,"satellites":"starlink,oneweb,iridium-next"} — live satellite intelligence',
-    'Free text — chat with JARV-Genie',
+    '/jarv.ask — chat with JARV (can use OSINT tools to answer)',
+    'Free text — JARV chat (tool-enabled)',
   ].join('\n');
 
   async function ensurePeerAndSession() {
@@ -172,6 +173,7 @@ function makeTelegramTunnel({ pool, mesh, log, config = {}, jarv = null } = {}) 
     'ai.result.get': { args: ['id'], handler: (args, peerId) => mesh.executor('ai.result.get', args, { peerId }) },
     'osint.handbook': { args: [], handler: (args, peerId) => mesh.executor('osint.handbook', args, { peerId }) },
     'osint.satvision': { args: ['lat', 'lon', 'satellites?', 'overhead?', 'footprint?'], handler: (args, peerId) => mesh.executor('osint.satvision', args, { peerId }) },
+    'jarv.ask': { args: ['prompt', 'maxToolTurns?'], handler: (args, peerId) => mesh.executor('jarv.ask', args, { peerId }) },
   };
   async function execCommand(command, args, chatId) {
     const peer = await ensurePeerAndSession();
@@ -307,10 +309,11 @@ function makeTelegramTunnel({ pool, mesh, log, config = {}, jarv = null } = {}) 
         const out = await execCommand(cmd, args, chatId);
         await sendMessage(chatId, out.ok ? `<pre>${safeStringify(out.result).slice(0, 3500)}</pre>` : `Error: ${safeStringify(out.error)}`);
       } else {
-        // Free text → AI chat.
+        // Free text → JARV chat (AI tool-use loop): JARV can read its OSINT
+        // handbook and run satellite queries to answer autonomously.
         const peer = await ensurePeerAndSession();
-        const out = await mesh.executor('ai.complete', { prompt: text }, { peerId: peer.id });
-        await sendMessage(chatId, out && out.reply ? out.reply : `AI error: ${safeStringify(out)}`);
+        const out = await mesh.executor('jarv.ask', { prompt: text }, { peerId: peer.id });
+        await sendMessage(chatId, out && out.reply ? out.reply : `JARV error: ${safeStringify(out)}`);
       }
       if (auditCmd) await audit(auditCmd, { text }, null, 'ok');
     } catch (e) {

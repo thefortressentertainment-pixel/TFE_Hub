@@ -134,6 +134,14 @@ export default function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem('fortress_theme') || 'light')
   const [comms, setComms] = useState(null)
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
+  const [osintShow, setOsintShow] = useState(false)
+  const [osintLat, setOsintLat] = useState('')
+  const [osintLon, setOsintLon] = useState('')
+  const [osintSatGroups, setOsintSatGroups] = useState('starlink,oneweb,iridium-next,gps')
+  const [osintData, setOsintData] = useState(null)
+  const [osintLoading, setOsintLoading] = useState(false)
+  const [osintError, setOsintError] = useState('')
+  const [osintHandbook, setOsintHandbook] = useState(null)
 
   const toggleTheme = () => {
     setTheme(prev => {
@@ -268,6 +276,36 @@ export default function App() {
   useEffect(() => {
     if (selectedProfile) fetchDailySummary(selectedProfile)
   }, [selectedProfile])
+
+  // ---- OSINT: JARV satellite-comms intelligence (OrbitDeck) ----
+  const loadOsintHandbook = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/osint/handbook`)
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'handbook unavailable')
+      setOsintHandbook(j.handbook)
+    } catch (e) {
+      setOsintError('Handbook: ' + String(e))
+    }
+  }
+  const runOsintSatvision = async () => {
+    if (!osintLat || !osintLon) return setOsintError('Enter latitude and longitude')
+    setOsintLoading(true)
+    setOsintError('')
+    setOsintData(null)
+    try {
+      const q = new URLSearchParams({ lat: osintLat, lon: osintLon })
+      if (osintSatGroups) q.set('satellites', osintSatGroups)
+      q.set('overhead', 'true'); q.set('footprint', 'true')
+      const r = await fetch(`${API_BASE}/api/osint/satvision?${q}`)
+      const j = await r.json()
+      if (!r.ok || !j.ok) throw new Error(j.error || 'satvision failed')
+      setOsintData(j)
+    } catch (e) {
+      setOsintError('Satvision: ' + String(e))
+    }
+    setOsintLoading(false)
+  }
 
   useEffect(() => {
     if (selectedProfile) {
@@ -1522,6 +1560,62 @@ export default function App() {
               </div>
             )}
           </div>
+        </div>
+
+        <div className="panel-card" style={{ marginBottom: 16 }}>
+          <div className="flex-between" style={{ marginBottom: 4 }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>OSINT — Satellite Comms Intelligence</h2>
+            <button onClick={() => setOsintShow(s => !s)}>{osintShow ? 'Hide' : 'Open'}</button>
+          </div>
+          {osintShow && (
+            <div>
+              <div className="muted" style={{ marginBottom: 10 }}>
+                Live satcom vision via OrbitDeck (JARV cross-trained). Query overhead satellites, passes and coverage footprints.
+              </div>
+              <div className="flex mb-8" style={{ gap: 6 }}>
+                <button className="btn-sm" onClick={loadOsintHandbook}>{osintHandbook ? 'Handbook loaded' : 'Load Handbook'}</button>
+              </div>
+              {osintHandbook && (
+                <div className="status-box" style={{ marginBottom: 10, maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                  {osintHandbook}
+                </div>
+              )}
+              <div className="flex" style={{ gap: 8, marginBottom: 8 }}>
+                <input placeholder="Latitude" type="number" step="any" value={osintLat} onChange={e => setOsintLat(e.target.value)} style={{ width: 110 }} />
+                <input placeholder="Longitude" type="number" step="any" value={osintLon} onChange={e => setOsintLon(e.target.value)} style={{ width: 110 }} />
+                <input placeholder="Groups" value={osintSatGroups} onChange={e => setOsintSatGroups(e.target.value)} style={{ flex: 1 }} title="starlink, oneweb, iridium-next, gps, galileo, glonass, beidou, geo" />
+                <button onClick={runOsintSatvision} disabled={osintLoading}>{osintLoading ? 'Scanning…' : 'Scan Sky'}</button>
+              </div>
+              {osintError && <div className="status-box" style={{ marginBottom: 8, color: '#b42318', background: '#fef3f2' }}>{osintError}</div>}
+              {osintData && (() => {
+                const vis = (() => { try { return JSON.parse(osintData.stdout) } catch (e) { return null } })()
+                if (!vis) return <div className="muted">No usable satellite data returned.</div>
+                const overhead = vis.overhead || []
+                return (
+                  <div>
+                    <div className="flex" style={{ gap: 8, marginBottom: 8 }}>
+                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Tracked</div><div className="stat-value">{vis.satellites_tracked}</div></div>
+                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Overhead now</div><div className="stat-value">{overhead.length}</div></div>
+                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Observer</div><div className="stat-value" style={{ fontSize: 12 }}>{vis.observer.lat}°, {vis.observer.lon}°</div></div>
+                    </div>
+                    {overhead.length > 0 ? (
+                      <div className="status-box">
+                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Satellites above the horizon</div>
+                        {overhead.slice(0, 12).map((s, i) => (
+                          <div key={i} className="flex-between" style={{ marginBottom: 2, fontSize: 12 }}>
+                            <span>{s.satellite} <span className="muted">({s.norad})</span></span>
+                            <span className="muted">el {s.elevation_deg}° • az {s.azimuth_deg}° • {s.range_km} km</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="muted">No satellites above the horizon right now.</div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+          )}
         </div>
       </div>
 

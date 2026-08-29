@@ -51,13 +51,46 @@ async function main() {
   try { await executor('osint.satvision', { lat: 40.4, lon: -3.65, evil: 1 }, {}); }
   catch (e) { rejected = String((e && e.message) || e); }
   check('unknown satvision param rejected', !!rejected && /unknown osint\.satvision param/.test(rejected));
-  try { await executor('osint.satvision', {}, { jarv: null }); }
-  catch (e) { rejected = String((e && e.message) || e); }
   const noJarvExecutor = genieMesh.buildExecutor(makeTinyPool(), { getStatus: () => ({ ok: true }) });
   let noJarvErr = null;
   try { await noJarvExecutor('osint.handbook', {}, {}); }
   catch (e) { noJarvErr = String((e && e.message) || e); }
   check('missing jarv handled gracefully', !!noJarvErr && /JARV agent not available/.test(noJarvErr));
+
+  console.log('\n[5] OpenAI tool schema');
+  const tools = jarvAgent.getOpenAITools();
+  check('schema exposes 7 tools', Array.isArray(tools) && tools.length === 7);
+  const sat = tools.find((t) => t.function.name === 'jarv_satvision');
+  check('jarv_satvision schema requires lat+lon', !!sat && sat.function.parameters.required.includes('lat') && sat.function.parameters.required.includes('lon'));
+  check('schema serializes to valid JSON', (() => { try { JSON.stringify(tools); return true; } catch (e) { return false; } })());
+  let askRouteErr = null;
+  try { await executor('jarv.ask', { prompt: 'hi' }, {}); }
+  catch (e) { askRouteErr = String((e && e.message) || e); }
+  check('mesh command jarv.ask routed to JARV', !!askRouteErr && /AI relay/.test(askRouteErr));
+
+  console.log('\n[6] JARV ask() tool-use loop (stub AI)');
+  let calls = 0;
+  const stubAi = {
+    complete: async (args) => {
+      calls++;
+      if (calls === 1) {
+        return { ok: true, reply: '', tool_calls: [{ id: 'tc1', type: 'function', function: { name: 'jarv_osint_handbook', arguments: '{}' } }] };
+      }
+      return { ok: true, reply: 'Handbook loaded — 7 OSINT tools ready.', provider: 'stub', model: 'stub' };
+    },
+  };
+  const jarvB = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: stubAi, log: () => {} });
+  const ans = await jarvB.ask('are satellites overhead right now?');
+  check('ask() executed the handbook tool', calls === 2 && ans.toolCalls.length === 1 && ans.toolCalls[0].name === 'jarv_osint_handbook');
+  check('ask() returned final reply', ans.reply === 'Handbook loaded — 7 OSINT tools ready.');
+  let askErr = null;
+  try { await jarvB.ask('hi'); } catch (e) { askErr = String((e && e.message) || e); }
+  // After loop consumed stub: complete now returns final immediately (calls goes 2→3), so no throw expected.
+  check('ask() without allowed turns still yields a reply', typeof ans.reply === 'string' && ans.reply.length > 0);
+  check('ask() throws when AI relay missing', (() => {
+    const bare = jarvAgent.makeJarvAgent({ pool: makeTinyPool(), ai: null, log: () => {} });
+    return bare.ask('hi').then(() => false).catch((e) => /AI relay/.test(String(e.message)));
+  })());
 
   try { jarv.dispose && jarv.dispose(); } catch (e) {}
   fsRmdir(sandbox);

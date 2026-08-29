@@ -985,6 +985,37 @@ app.get('/api/comms/telegram', (req, res) => {
   res.json({ telegram: telegram.getStatus() });
 });
 
+// ---- OSINT for the app: JARV satellite-comms intelligence under regular auth ----
+const OSINT_SATVISION_PARAMS = ['lat', 'lon', 'alt', 'satellites', 'passes', 'min_el', 'overhead', 'footprint'];
+app.use('/api/osint', (req, res, next) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to use OSINT' });
+  next();
+});
+app.get('/api/osint/handbook', async (req, res) => {
+  try {
+    const out = await jarv.executeTool('jarv_osint_handbook', {});
+    if (!out.ok) return res.status(500).json({ error: out.error || 'handbook unavailable' });
+    res.json({ handbook: out.content, source: out.source });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.get('/api/osint/satvision', async (req, res) => {
+  try {
+    const args = {};
+    for (const p of OSINT_SATVISION_PARAMS) if (req.query[p] !== undefined) args[p] = req.query[p];
+    const out = await jarv.executeTool('jarv_satvision', args);
+    return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/osint/satvision', async (req, res) => {
+  try {
+    const body = (req.body || {});
+    const args = {};
+    for (const p of OSINT_SATVISION_PARAMS) if (body[p] !== undefined) args[p] = body[p];
+    const out = await jarv.executeTool('jarv_satvision', args);
+    return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
 function detectTailscaleIp() {
   try {
     const out = require('child_process').execFileSync('tailscale', ['ip', '-4'], { timeout: 1500, encoding: 'utf8' });

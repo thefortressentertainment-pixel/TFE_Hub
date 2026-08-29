@@ -238,9 +238,14 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
   /**
    * One OpenAI-compatible call against a single provider entry. Every
    * registry host (and Ollama) speaks this shape, so one path serves all.
+   * `options.tools` (array) + `options.tool_choice` enable function calling,
+   * and the raw assistant message (incl. `tool_calls`) is returned for the
+   * caller to orchestrate a JARV tool loop.
    */
   async function chatOnce(entry, model, messages, options) {
     const body = { model, messages, temperature: options.temperature, max_tokens: options.max_tokens, stream: false };
+    if (options.tools) body.tools = options.tools;
+    if (options.tool_choice) body.tool_choice = options.tool_choice;
     const headers = { 'User-Agent': `fortress-genie-mesh/${AI_VERSION}`, 'Content-Type': 'application/json' };
     if (entry.apiKey) headers.Authorization = `Bearer ${entry.apiKey}`;
     const resp = await requestJson('POST', `${entry.baseUrl}${entry.path || '/chat/completions'}`, headers, body, options.timeoutMs || 60000);
@@ -248,6 +253,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     const content = resp.choices[0].message && resp.choices[0].message.content;
     return {
       content: content == null ? '' : String(content),
+      message: resp.choices[0].message || null,
       model: resp.model || model,
       usage: resp.usage || null,
       cached: !!(resp.usage && (resp.usage.prompt_cache_hit_tokens || resp.usage.prompt_tokens_details)),
@@ -316,6 +322,9 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
       max_tokens: args.max_tokens != null ? Number(args.max_tokens) : cfg.maxTokens,
       model: args.model || cfg.model,
       timeoutMs: args.timeoutMs || 60000,
+      tools: Array.isArray(args.tools) && args.tools.length ? args.tools : null,
+      tool_choice: args.tool_choice || undefined,
+      maxToolTurns: args.maxToolTurns || 0,
     };
   }
 
@@ -346,6 +355,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
         model: result.model || options.model,
         reply: result.content, usage: result.usage || null,
         latencyMs: state.lastLatencyMs, cached: !!result.cached,
+        tool_calls: (result.message && result.message.tool_calls) || null,
       };
     } catch (e) {
       state.lastError = String((e && e.message) || e);

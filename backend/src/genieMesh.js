@@ -483,6 +483,17 @@ function buildExecutor(pool, meshRef) {
       for (const k of Object.keys(args || {})) if (!allowed.includes(k)) throw new Error(`unknown osint.satvision param: ${k}`);
       return ctx.jarv.executeTool('jarv_satvision', args);
     },
+
+    // Full JARV chat: AI tool-use loop so JARV answers using its tools
+    // (OSINT handbook, jarv_satvision, sandbox read/write/run) mid-conversation.
+    'jarv.ask': async (args = {}, ctx = {}) => {
+      if (!ctx.jarv) throw new Error('JARV agent not available');
+      const text = args.prompt != null ? String(args.prompt) : null;
+      if (text == null && !Array.isArray(args.messages)) throw new Error('prompt or messages required');
+      return ctx.jarv.ask(text != null ? text : args.messages, {
+        maxToolTurns: args.maxToolTurns, model: args.model, max_tokens: args.max_tokens,
+      });
+    },
   };
 
   // Normalize a prompt/messages into an array for persistent storage.
@@ -1015,6 +1026,7 @@ function createGenieApi({ pool, mesh, rateLimit, log }) {
     min_el: req.query.min_el, overhead: req.query.overhead, footprint: req.query.footprint,
   }));
   router.post('/osint/satvision', (req, res) => void runAs(req, res, 'osint.satvision', req.body || {}));
+  router.post('/jarv/ask', (req, res) => void runAs(req, res, 'jarv.ask', req.body || {}));
 
     // Pull-mode delivery: the peer fetches pending outbox events over REST
   // (satellite-friendly: works with high delay, tiny round-trips), then acks.

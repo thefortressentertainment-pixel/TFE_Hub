@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { io } from 'socket.io-client'
-import { startTracking, stopTracking, requestPermission, isNative } from './locationService'
-import SanctuaryGlobe from './components/SanctuaryGlobe'
+import GodsEyeView from './components/GodsEyeView'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? 'https://tfe-hub.onrender.com').replace(/\/+$/, '')
+
+const DEFAULT_GROUPS = 'starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo,iss'
 
 function getDeviceId() {
   let id = localStorage.getItem('fortress_device_id')
@@ -14,6 +14,43 @@ function getDeviceId() {
   return id
 }
 const DEVICE_ID = getDeviceId()
+
+const STARS = Array.from({ length: 90 }, (_, i) => ({
+  left: (i * 137.5) % 100,
+  top: (i * 61.8) % 100,
+  size: 1 + (i % 3) * 0.6,
+  tw: `${2.5 + (i % 5)}s`,
+}))
+
+const VIEWS = [
+  { id: 'command', label: 'Command Core', icon: '◉', desc: 'JARV mind — chat + AI relay over the Genie mesh' },
+  { id: 'gods-eye', label: "God's Eye", icon: '◍', desc: 'Live global satellite OSINT on the Earth globe' },
+  { id: 'forge', label: 'Code Forge', icon: '⌁', desc: 'Sandboxed CLI + MCP + IDE to build from the hub' },
+]
+
+const PROVIDER_KEYS = [
+  { name: 'Groq', env: 'GROQ_API_KEY', url: 'https://console.groq.com/keys', note: 'fast Llama + large context' },
+  { name: 'Cerebras', env: 'CEREBRAS_API_KEY', url: 'https://cloud.cerebras.ai/', note: 'fastest inference' },
+  { name: 'Google Gemini', env: 'GEMINI_API_KEY', url: 'https://aistudio.google.com/app/apikey', note: 'frontier models, big free tier' },
+  { name: 'Mistral', env: 'MISTRAL_API_KEY', url: 'https://console.mistral.ai/', note: '1B tokens/mo free' },
+  { name: 'OpenRouter', env: 'OPENROUTER_API_KEY', url: 'https://openrouter.ai/keys', note: 'many :free model routes' },
+  { name: 'NVIDIA', env: 'NVIDIA_API_KEY', url: 'https://build.nvidia.com/', note: 'no card needed' },
+  { name: 'SambaNova', env: 'SAMBANOVA_API_KEY', url: 'https://cloud.sambanova.ai/', note: 'no card needed' },
+  { name: 'GitHub Models', env: 'GITHUB_MODELS_TOKEN', url: 'https://github.com/marketplace/models', note: 'GPT-4o / o3' },
+  { name: 'Cohere', env: 'COHERE_API_KEY', url: 'https://dashboard.cohere.com/', note: '1K calls/mo' },
+  { name: 'SiliconFlow', env: 'SILICONFLOW_API_KEY', url: 'https://cloud.siliconflow.cn/', note: 'no card needed' },
+  { name: 'Together', env: 'TOGETHER_API_KEY', url: 'https://api.together.xyz/', note: 'no card needed' },
+  { name: 'Hugging Face', env: 'HUGGINGFACE_API_KEY', url: 'https://huggingface.co/settings/tokens', note: '300+ models' },
+  { name: 'Fireworks', env: 'FIREWORKS_API_KEY', url: 'https://fireworks.ai/', note: 'no card needed' },
+  { name: 'Nebius', env: 'NEBIUS_API_KEY', url: 'https://studio.nebius.ai/', note: 'DeepSeek V3' },
+  { name: 'Scaleway', env: 'SCALEWAY_API_KEY', url: 'https://console.scaleway.com/', note: 'generative APIs' },
+  { name: 'Z.AI', env: 'ZAI_API_KEY', url: 'https://open.bigmodel.cn/', note: 'GLM models' },
+  { name: 'Venice', env: 'VENICE_API_KEY', url: 'https://venice.ai/', note: 'no card needed' },
+  { name: 'Hyperbolic', env: 'HYPERBOLIC_API_KEY', url: 'https://app.hyperbolic.xyz/', note: 'no card needed' },
+  { name: 'Novita', env: 'NOVITA_API_KEY', url: 'https://novita.ai/', note: 'no card needed' },
+  { name: 'Cloudflare', env: 'CLOUDFLARE_API_KEY + CLOUDFLARE_ACCOUNT_ID', url: 'https://dash.cloudflare.com/profile/api-tokens', note: 'Workers AI' },
+]
+const KEYS_DEST = "backend/.env"
 
 function getToken() {
   return localStorage.getItem('fortress_token') || ''
@@ -28,33 +65,6 @@ window.fetch = (url, opts) => {
     return origFetch(url, { ...opts, headers })
   }
   return origFetch(url, opts)
-}
-
-function money(value) {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(Number(value || 0))
-}
-
-const DEDUCIBILITY_HINTS = {
-  'Fuel': { pct: 100, hint: 'Fully deductible as business fuel. Tag to your shift or job.' },
-  'Vehicle': { pct: 100, hint: 'Maintenance/repair deductible if the vehicle is used for work. Log odometer.' },
-  'Food & Drink': { pct: 50, hint: 'Meals often 50% deductible — write the business purpose (e.g. "meeting with client").' },
-  'Food Delivery': { pct: 100, hint: 'Business meal — tag who/what it was for.' },
-  'Transport': { pct: 100, hint: 'Uber/parking/tolls deductible as business travel.' },
-  'Travel': { pct: 100, hint: 'Hotel/travel deductible for business trips. Keep the dates.' },
-  'Utilities': { pct: 100, hint: 'Phone/internet — a % may be deductible if used for work.' },
-  'Medical': { pct: 0, hint: 'Not a business deduction unless directly work-related.' },
-  'Groceries': { pct: 0, hint: 'Personal unless it is a business supply. Usually not deductible.' },
-  'Shopping': { pct: 0, hint: 'Deductible only if it is equipment/tools for your work.' },
-  'Subscriptions': { pct: 50, hint: 'Software/tools used for work may be 50-100% deductible.' },
-}
-
-function deductibleMeta(receipt) {
-  const isPersonal = receipt.is_business === false
-  if (isPersonal) return { cls: 'tag-personal', label: 'Personal', hint: 'Marked personal — not deductible.' }
-  const info = DEDUCIBILITY_HINTS[receipt.category] || DEDUCIBILITY_HINTS[receipt.tax_category]
-  if (info && info.pct === 100) return { cls: 'tag-deductible', label: 'Deductible', hint: info.hint }
-  if (info && info.pct > 0) return { cls: 'tag-partial', label: `${info.pct}%`, hint: info.hint }
-  return { cls: 'tag-personal', label: 'Review', hint: 'Check deductibility — may not qualify.' }
 }
 
 function linkMeta(comms) {
@@ -85,65 +95,34 @@ export default function App() {
   const [authError, setAuthError] = useState('')
   const [authLoading, setAuthLoading] = useState(false)
   const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('token') || '')
-  const [profiles, setProfiles] = useState([])
-  const [profileSummaries, setProfileSummaries] = useState([])
-  const [newProfile, setNewProfile] = useState('')
-  const [newBudget, setNewBudget] = useState('')
-  const [selectedProfile, setSelectedProfile] = useState('')
-  const [file, setFile] = useState(null)
-  const [status, setStatus] = useState('Ready to upload a receipt')
-  const [jobId, setJobId] = useState(null)
-  const [showDashboard, setShowDashboard] = useState(false)
-  const [dashboardReceipts, setDashboardReceipts] = useState([])
-  const [selectedReceipt, setSelectedReceipt] = useState(null)
-  const [isUploading, setIsUploading] = useState(false)
-  const socketRef = useRef(null)
 
-  const [showMileage, setShowMileage] = useState(false)
-  const [mileageLogs, setMileageLogs] = useState([])
-  const [mileageForm, setMileageForm] = useState({ start_odometer: '', end_odometer: '', purpose: '', project_name: '' })
-
-  const [showProjects, setShowProjects] = useState(false)
-  const [projects, setProjects] = useState([])
-  const [newProjectName, setNewProjectName] = useState('')
-
-  const [showTax, setShowTax] = useState(false)
-  const [taxData, setTaxData] = useState(null)
-
-  const [showTrends, setShowTrends] = useState(false)
-  const [trends, setTrends] = useState([])
-  const [chartData, setChartData] = useState(null)
-
-  const [categories, setCategories] = useState([])
-
-  const [editReceipt, setEditReceipt] = useState(null)
-  const [editForm, setEditForm] = useState({})
-  const [searchQuery, setSearchQuery] = useState('')
-  const [viewReceiptImage, setViewReceiptImage] = useState(null)
   const [toast, setToast] = useState('')
   const toastTimer = useRef(null)
-
   const showToast = (msg) => {
     setToast(msg)
     clearTimeout(toastTimer.current)
     toastTimer.current = setTimeout(() => setToast(''), 3000)
   }
 
-  const [errorMsg, setErrorMsg] = useState('')
-
   const [showSettings, setShowSettings] = useState(false)
+  const [view, setView] = useState('command')
   const [theme, setTheme] = useState(() => localStorage.getItem('fortress_theme') || 'light')
   const [comms, setComms] = useState(null)
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
-  const [osintShow, setOsintShow] = useState(false)
-  const [osintLat, setOsintLat] = useState('')
-  const [osintLon, setOsintLon] = useState('')
-  const [osintSatGroups, setOsintSatGroups] = useState('starlink,oneweb,iridium-next,gps')
-  const [osintData, setOsintData] = useState(null)
-  const [osintLoading, setOsintLoading] = useState(false)
-  const [osintError, setOsintError] = useState('')
-  const [osintHandbook, setOsintHandbook] = useState(null)
-  const [osintPolicy, setOsintPolicy] = useState(null)
+
+  const [keyProviders, setKeyProviders] = useState([])
+  const [keyInputs, setKeyInputs] = useState({})
+  const [keyStatus, setKeyStatus] = useState('')
+  const [keysBusy, setKeysBusy] = useState(false)
+
+  const [vibePending, setVibePending] = useState(null)
+  const [cliPending, setCliPending] = useState(null)
+
+  const [workspace, setWorkspace] = useState(null)
+  const [autoShell, setAutoShell] = useState(false)
+  const [autoNet, setAutoNet] = useState(false)
+  const [autoStatus, setAutoStatus] = useState('')
+
   const [hubLocation, setHubLocation] = useState(null)
   const [hubLocSource, setHubLocSource] = useState('no fix')
   const [locError, setLocError] = useState('')
@@ -152,6 +131,209 @@ export default function App() {
   const [globePositions, setGlobePositions] = useState([])
   const [globeLoading, setGlobeLoading] = useState(false)
   const [globeError, setGlobeError] = useState('')
+
+  const [chatMsgs, setChatMsgs] = useState([])
+  const [chatInput, setChatInput] = useState('')
+  const [chatLoading, setChatLoading] = useState(false)
+  const chatEndRef = useRef(null)
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [chatMsgs, chatLoading])
+
+  const [cliLines, setCliLines] = useState([])
+  const [cliInput, setCliInput] = useState('')
+  const [cliBusy, setCliBusy] = useState(false)
+  const cliEndRef = useRef(null)
+  useEffect(() => { if (cliEndRef.current) cliEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [cliLines, cliBusy])
+  const [cliApprove, setCliApprove] = useState(false)
+  const [forgeTab, setForgeTab] = useState('vibe')
+  const [vibeInput, setVibeInput] = useState('')
+  const [vibeBusy, setVibeBusy] = useState(false)
+  const [vibeLines, setVibeLines] = useState([])
+  const vibeEndRef = useRef(null)
+  useEffect(() => { if (vibeEndRef.current) vibeEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [vibeLines, vibeBusy])
+
+  const [tree, setTree] = useState([])
+  const [treeLoading, setTreeLoading] = useState(false)
+  const [currentFile, setCurrentFile] = useState('')
+  const [editor, setEditor] = useState('')
+  const [fileMeta, setFileMeta] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [runLog, setRunLog] = useState('')
+
+  const sendJarvMessage = async () => {
+    const text = chatInput.trim()
+    if (!text || chatLoading) return
+    const history = chatMsgs
+      .map(m => ({ role: m.role === 'jarv' ? 'assistant' : 'user', content: m.text }))
+      .slice(-10)
+    const next = [...chatMsgs, { role: 'user', text }]
+    setChatMsgs(next)
+    setChatInput('')
+    setChatLoading(true)
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text, history }),
+      })
+      const j = await r.json()
+      if (j.ok) {
+        setChatMsgs(prev => [...prev, { role: 'jarv', text: j.reply, meta: `${j.provider || 'jarv-mesh'}${j.model ? ` · ${j.model}` : ''}${j.turns ? ` · ${j.turns} turn${j.turns > 1 ? 's' : ''}` : ''}${j.toolCalls && j.toolCalls.length ? ` · tools: ${j.toolCalls.map(t => t.name).join(', ')}` : ''}` }])
+      } else {
+        setChatMsgs(prev => [...prev, { role: 'jarv', text: `⚠ ${j.error || 'JARV relay failed'}`, meta: 'error' }])
+      }
+    } catch (e) {
+      setChatMsgs(prev => [...prev, { role: 'jarv', text: `⚠ Cannot reach JARV: ${String(e)}`, meta: 'error' }])
+    }
+    setChatLoading(false)
+  }
+
+  const promptLine = (s) => `[jarv@hub ${'jarv-sandbox'}]# ${s}`
+
+  const pushCli = (kind, text) => setCliLines(prev => [...prev, { kind, text }])
+
+  const runCli = async (approve) => {
+    const line = (approve && cliPending && cliPending.command) || cliInput.trim()
+    if (!line || cliBusy) return
+    if (!approve) { pushCli('in', promptLine(line)); setCliInput('') }
+    setCliBusy(true)
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/cli`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(approve ? { command: line, approval: approve } : { command: line, unlock: cliApprove }),
+      })
+      const j = await r.json()
+      if (j.needsApproval && j.needsApproval.length && !approve) {
+        setCliPending({ command: line, needsApproval: j.needsApproval })
+        pushCli('out', `JARV wants to ${j.needsApproval.map(t => t.name.replace('jarv_', '')).join(' + ')} — choose approval below.`)
+        if (j.reply) pushCli('out', `   ${j.reply.slice(0, 300)}`)
+      } else {
+        setCliPending(null)
+        if (j.ok && (j.reply !== undefined)) {
+          pushCli('out', `[${j.provider || 'jarv'}]${j.model ? ` (${j.model})` : ''}: ${j.reply}${j.toolCalls && j.toolCalls.length ? `\n   ↳ tools: ${j.toolCalls.map(t => t.name + (t.args && Object.keys(t.args).length ? ' ' + JSON.stringify(t.args) : '')).join(', ')}` : ''}`)
+          if (j.turns) pushCli('out', `   ↳ ${j.turns} turn${j.turns > 1 ? 's' : ''}`)
+        } else if (j.blocked && !j.tool) {
+          pushCli('err', `⛔ ${j.error}`)
+          pushCli('err', `   tip: tick the "approve write/edit/run" box to allow one-shot, or pick an approval level below.`)
+        } else if (j.tool) {
+          if (j.ok && j.exitCode === undefined) {
+            pushCli('out', j.stdout ? j.stdout : JSON.stringify(j, null, 2).slice(0, 4000))
+          } else if (j.exitCode !== undefined) {
+            pushCli('out', `exit ${j.exitCode}${j.stdout ? `\n${j.stdout}` : ''}${j.stderr ? `\n[stderr] ${j.stderr}` : ''}`)
+          } else {
+            pushCli('err', `⛔ ${j.error || 'command failed'}`)
+          }
+        } else {
+          pushCli('err', `⛔ ${j.error || ('HTTP ' + r.status)}`)
+        }
+      }
+    } catch (e) {
+      pushCli('err', `⛔ connection failed: ${String(e.message || e)}`)
+    }
+    setCliBusy(false)
+  }
+
+  const pushVibe = (kind, text) => setVibeLines(prev => [...prev, { kind, text }])
+
+  const runVibe = async (approve) => {
+    const ask = (approve && vibePending && vibePending.command) || vibeInput.trim()
+    if (!ask || vibeBusy) return
+    if (!approve) { pushVibe('in', ask); setVibeInput('') }
+    setVibeBusy(true)
+    pushVibe('out', approve ? '…re-running with your approval…' : '…JARV is shaping that into workspace scripts…')
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/cli`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(approve ? { command: ask, approval: approve } : { command: ask }),
+      })
+      const j = await r.json()
+      const stain = approve ? '…re-running with your approval…' : '…JARV is shaping that into workspace scripts…'
+      setVibeLines(prev => prev.filter(l => l.text !== stain))
+      if (j.needsApproval && j.needsApproval.length && !approve) {
+        setVibePending({ command: ask, needsApproval: j.needsApproval })
+        pushVibe('out', `JARV wants to ${j.needsApproval.map(t => t.name.replace('jarv_', '')).join(' + ')}`)
+        if (j.reply) pushVibe('code', j.reply.slice(0, 400))
+      } else {
+        setVibePending(null)
+        if (j.ok) {
+          pushVibe('out', `[${j.provider || 'jarv'}${j.model ? ` · ${j.model}` : ''}${j.turns ? ` · ${j.turns} turn${j.turns > 1 ? 's' : ''}` : ''}]`)
+          pushVibe('code', j.reply || '(no reply)')
+          if (j.toolCalls && j.toolCalls.length) {
+            pushVibe('out', `↳ tools used: ${j.toolCalls.map(t => t.name).join(', ')}`)
+            const written = j.toolCalls.find(t => t.name === 'jarv_write')
+            if (written && written.args && written.args.path) {
+              pushVibe('out', `↳ wrote ${written.args.path} — open it in the IDE tab.`)
+              loadTree()
+            }
+          }
+        } else {
+          pushVibe('err', `⛔ ${j.error || ('HTTP ' + r.status)}`)
+        }
+      }
+    } catch (e) {
+      setVibeLines(prev => prev.filter(l => l.text.startsWith('…')))
+      pushVibe('err', `⛔ connection failed: ${String(e.message || e)}`)
+    }
+    setVibeBusy(false)
+  }
+
+  const openVibeFile = async (name) => {
+    setRunLog('')
+    await openFile(name)
+  }
+
+  const loadTree = async () => {
+    setTreeLoading(true)
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/code/list`)
+      const j = await r.json()
+      if (j.ok) setTree(j.entries || [])
+    } catch (e) { /* ignore */ }
+    setTreeLoading(false)
+  }
+  useEffect(() => { if (user) loadTree() }, [user])
+
+  const openFile = async (name) => {
+    let path = name
+    const r = await fetch(`${API_BASE}/api/jarv/code/read?path=${encodeURIComponent(path)}`)
+    const j = await r.json()
+    if (j.ok) {
+      setCurrentFile(path)
+      setFileMeta(j)
+      setEditor(j.binary ? '' : (j.content || ''))
+      setRunLog('')
+    }
+  }
+
+  const saveFile = async () => {
+    if (!currentFile) return
+    setSaving(true)
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/code/write`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentFile, content: editor }),
+      })
+      const j = await r.json()
+      showToast(j.ok ? `Saved ${currentFile}` : `Save failed: ${j.error || 'HTTP ' + r.status}`)
+    } catch (e) { showToast(`Save failed: ${String(e)}`) }
+    setSaving(false)
+  }
+
+  const runEditor = async () => {
+    if (!currentFile) return
+    setRunLog('running…')
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/code/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: `node ${currentFile}` }),
+      })
+      const j = await r.json()
+      setRunLog(j.ok ? `$ node ${currentFile}\n${j.stdout || ''}${j.stderr ? `\n[stderr] ${j.stderr}` : ''}${j.exitCode !== undefined ? `\n[exit ${j.exitCode}]` : ''}` : `⛔ ${j.error || 'HTTP ' + r.status}`)
+    } catch (e) { setRunLog(`⛔ ${String(e)}`) }
+  }
 
   const toggleTheme = () => {
     setTheme(prev => {
@@ -238,28 +420,7 @@ export default function App() {
     localStorage.removeItem('fortress_token')
     localStorage.removeItem('fortress_user')
     setUser(null)
-    setProfiles([])
-    setProfileSummaries([])
-    setDashboardReceipts([])
-    setSelectedProfile('')
   }
-
-  const [activeShift, setActiveShift] = useState(null)
-  const [shiftElapsed, setShiftElapsed] = useState(0)
-  const [shiftMiles, setShiftMiles] = useState(0)
-  const [shiftPurpose, setShiftPurpose] = useState('')
-  const elapsedIntervalRef = useRef(null)
-  const [dailySummary, setDailySummary] = useState(null)
-  const [recentShifts, setRecentShifts] = useState([])
-  const [lastShiftSummary, setLastShiftSummary] = useState(null)
-  const [isRecording, setIsRecording] = useState(false)
-  const recognitionRef = useRef(null)
-
-  useEffect(() => {
-    fetchProfiles()
-    fetchProfileSummaries()
-    fetchCategories()
-  }, [])
 
   useEffect(() => {
     // Genie Link + connectivity status (polls `/api/comms/status` every 30s).
@@ -283,47 +444,82 @@ export default function App() {
     }
   }, [user])
 
-  useEffect(() => {
-    if (selectedProfile) fetchDailySummary(selectedProfile)
-  }, [selectedProfile])
+  // ---- Settings: cloud API keys ----
+  const loadKeys = async (silent) => {
+    if (!user) return
+    try {
+      const r = await fetch(`${API_BASE}/api/ai/providers`)
+      const j = await r.json()
+      if (j.ok && Array.isArray(j.providers)) {
+        setKeyProviders(j.providers)
+        if (!silent) setKeyStatus('')
+      }
+    } catch (e) { if (!silent) setKeyStatus('Cannot reach server') }
+  }
+  const saveKeys = async () => {
+    if (!user) return
+    setKeysBusy(true)
+    setKeyStatus('Saving…')
+    try {
+      const r = await fetch(`${API_BASE}/api/ai/keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keys: keyInputs }),
+      })
+      const j = await r.json()
+      if (j.ok) {
+        setKeyStatus(j.errors && j.errors.length ? ('Saved — ' + j.errors.join('; ')) : 'Saved. Keys activate immediately.')
+        if (Array.isArray(j.providers)) setKeyProviders(j.providers)
+        setKeyInputs({})
+      } else {
+        setKeyStatus(j.error || 'Save failed')
+      }
+    } catch (e) { setKeyStatus('Cannot reach server') }
+    setKeysBusy(false)
+  }
+
+  // ---- JARV workspace + autonomy ----
+  const loadWorkspace = async () => {
+    if (!user) return
+    try {
+      const r = await fetch(`${API_BASE}/api/jarv/workspace`)
+      const j = await r.json()
+      if (j.ok) {
+        setWorkspace(j)
+        setAutoShell(j.autonomousShell)
+        setAutoNet(j.autonomousNet)
+      }
+    } catch (e) { /* ignore */ }
+  }
+  const saveAutonomy = async () => {
+    if (!user) return
+    setAutoStatus('Saving…')
+    try {
+      const r = await fetch(`${API_BASE}/api/settings/autonomy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shell: autoShell, net: autoNet }),
+      })
+      const j = await r.json()
+      setAutoStatus(j.ok ? 'Saved.' : (j.error || 'Save failed'))
+      if (j.ok) { setAutoShell(j.autonomousShell); setAutoNet(j.autonomousNet) }
+    } catch (e) { setAutoStatus('Cannot reach server') }
+  }
+  const resetSessionApprovals = async () => {
+    if (!user) return
+    try {
+      await fetch(`${API_BASE}/api/settings/autonomy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ resetSession: true }),
+      })
+      setAutoStatus('Session approval cleared.')
+      setVibePending(null)
+      setCliPending(null)
+    } catch (e) { setAutoStatus('Cannot reach server') }
+  }
 
   // ---- OSINT: JARV satellite-comms intelligence (OrbitDeck) ----
-  const loadOsintHandbook = async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/osint/handbook`)
-      const j = await r.json()
-      if (!r.ok) throw new Error(j.error || 'handbook unavailable')
-      setOsintHandbook(j.handbook)
-    } catch (e) {
-      setOsintError('Handbook: ' + String(e))
-    }
-  }
-  const loadOsintPolicy = async () => {
-    try {
-      const r = await fetch(`${API_BASE}/api/osint/policy`)
-      const j = await r.json()
-      if (r.ok) setOsintPolicy(j)
-    } catch (e) { /* non-fatal */ }
-  }
-  const runOsintSatvision = async () => {
-    if (!osintLat || !osintLon) return setOsintError('Enter latitude and longitude')
-    setOsintLoading(true)
-    setOsintError('')
-    setOsintData(null)
-    try {
-      const q = new URLSearchParams({ lat: osintLat, lon: osintLon })
-      if (osintSatGroups) q.set('satellites', osintSatGroups)
-      q.set('overhead', 'true'); q.set('footprint', 'true')
-      const r = await fetch(`${API_BASE}/api/osint/satvision?${q}`)
-      const j = await r.json()
-      if (!r.ok || !j.ok) throw new Error(j.error || 'satvision failed')
-      setOsintData(j)
-    } catch (e) {
-      setOsintError('Satvision: ' + String(e))
-    }
-    setOsintLoading(false)
-  }
-
   // ---- Hub location services + sanctuary globe ----
   const loadHubLocation = async () => {
     try {
@@ -358,7 +554,6 @@ export default function App() {
       if (j.ok) {
         const here = await loadHubLocation()
         setLocError('')
-        if (here) { setOsintLat(String(here.lat)); setOsintLon(String(here.lon)) }
         return j
       }
       setLocError(j.error || 'position report failed')
@@ -380,31 +575,31 @@ export default function App() {
     const j = await r.json()
     if (j.ok) {
       await loadHubLocation()
-      setOsintLat(String(j.lat)); setOsintLon(String(j.lon))
       setManualLat(''); setManualLon('')
     } else {
       setLocError(j.error || 'manual grid failed')
     }
   }
 
-  const useFamilyGrid = async () => {
-    const here = await loadHubLocation()
-    if (here) { setOsintLat(String(here.lat)); setOsintLon(String(here.lon)); setOsintError('') }
-    else setOsintError('No hub location yet — report from this device or set a manual grid.')
-  }
-
   const loadGlobe = async () => {
     setGlobeLoading(true)
     setGlobeError('')
+    const ctrl = new AbortController()
+    const to = setTimeout(() => ctrl.abort(), 20000)
     try {
-      const r = await fetch(`${API_BASE}/api/osint/globe?satellites=starlink,oneweb,iridium-next,gps`)
+      const r = await fetch(`${API_BASE}/api/osint/globe?satellites=${DEFAULT_GROUPS}`, { signal: ctrl.signal })
       const j = await r.json()
-      if (j.ok && Array.isArray(j.positions)) setGlobePositions(j.positions)
-      else setGlobeError((j && j.error) || 'globe projection unavailable')
+      if (j.ok && Array.isArray(j.positions)) {
+        setGlobePositions(j.positions)
+        setGlobeError((j.satellites_tracked === 0) ? 'No satellites reported — CelesTrak may be unavailable; cached constellations fall back automatically.' : '')
+      } else setGlobeError((j && j.error) || 'globe projection unavailable')
     } catch (e) {
-      setGlobeError(String(e))
+      if (e.name === 'AbortError') setGlobeError('satellite feed timed out (CelesTrak unreachable) — the globe still renders; cached data will fill in when the link returns')
+      else setGlobeError(String(e))
+    } finally {
+      clearTimeout(to)
+      setGlobeLoading(false)
     }
-    setGlobeLoading(false)
   }
 
   useEffect(() => {
@@ -416,544 +611,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
-  useEffect(() => {
-    if (selectedProfile) {
-      const res = fetch(`${API_BASE}/api/shifts/current?profileId=${selectedProfile}`)
-      res.then(r => r.json()).then(j => {
-        if (j.shift) {
-          setActiveShift(j.shift)
-          setShiftElapsed(Math.floor((Date.now() - new Date(j.shift.start_time).getTime()) / 1000))
-        }
-      }).catch(() => {})
-    }
-  }, [selectedProfile])
-
-  useEffect(() => {
-    if (selectedProfile) {
-      fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
-        .then(r => r.json())
-        .then(j => setRecentShifts(j.shifts || []))
-        .catch(() => {})
-    }
-  }, [selectedProfile])
-
-  useEffect(() => {
-    if (activeShift) {
-      elapsedIntervalRef.current = setInterval(() => {
-        setShiftElapsed(Math.floor((Date.now() - new Date(activeShift.start_time).getTime()) / 1000))
-      }, 1000)
-    } else {
-      clearInterval(elapsedIntervalRef.current)
-    }
-    return () => clearInterval(elapsedIntervalRef.current)
-  }, [activeShift])
-
-  useEffect(() => {
-    if (activeShift) {
-      startTracking(({ miles }) => setShiftMiles(miles), () => {})
-    } else {
-      stopTracking()
-      setShiftMiles(0)
-    }
-  }, [activeShift])
-
-  useEffect(() => {
-    if (!selectedProfile && profiles.length === 1) {
-      const singleProfileId = profiles[0].id
-      setSelectedProfile(singleProfileId)
-      loadReceiptsForProfile(singleProfileId)
-    }
-  }, [profiles, selectedProfile])
-
-  useEffect(() => {
-    const socket = io(API_BASE, { transportOptions: { polling: { extraHeaders: { 'X-Device-Id': DEVICE_ID } } } })
-    socketRef.current = socket
-    socket.on('connect', () => {
-      if (selectedProfile) socket.emit('subscribe:profile', selectedProfile)
-    })
-    socket.on('receipt:new', data => {
-      fetchProfileSummaries()
-      if (selectedProfile) loadReceiptsForProfile(selectedProfile)
-      setStatus(`New receipt: ${data.vendor} — ${money(data.total)}`)
-    })
-    socket.on('mileage:new', () => {
-      if (selectedProfile) fetchMileage(selectedProfile)
-    })
-    return () => socket.close()
-  }, [selectedProfile])
-
-  useEffect(() => {
-    if (socketRef.current?.connected && selectedProfile) {
-      socketRef.current.emit('subscribe:profile', selectedProfile)
-    }
-  }, [selectedProfile])
-
-  const fetchCategories = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/categories`)
-      const j = await res.json()
-      setCategories(j.categories || [])
-    } catch {}
-  }
-
-  const fetchProfiles = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/profiles`)
-      const j = await res.json()
-      setProfiles(j.profiles || [])
-    } catch {}
-  }
-
-  const fetchProfileSummaries = async () => {
-    try {
-      const res = await fetch(`${API_BASE}/api/profiles/summary`)
-      const j = await res.json()
-      setProfileSummaries(j.profiles || [])
-    } catch {}
-  }
-
-  const selectProfile = async (profileId) => {
-    setSelectedProfile(profileId)
-    if (profileId) {
-      await loadReceiptsForProfile(profileId)
-      fetchChartData(profileId)
-    } else {
-      setDashboardReceipts([])
-      setChartData(null)
-    }
-  }
-
-  const fetchChartData = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/analytics/spending-trends?profileId=${pid}&months=6`)
-      const j = await res.json()
-      setChartData(j.trends || [])
-    } catch {}
-  }
-
-  const createProfile = async () => {
-    if (!newProfile) return
-    const body = { name: newProfile }
-    if (newBudget) body.monthly_budget = Number(newBudget)
-    const res = await fetch(`${API_BASE}/api/profiles`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
-    const j = await res.json()
-    if (j.profile) {
-      setNewProfile('')
-      setNewBudget('')
-      await fetchProfiles()
-      await fetchProfileSummaries()
-      await selectProfile(j.profile.id)
-    }
-  }
-
-  const setBudget = async (profileId, budget) => {
-    const res = await fetch(`${API_BASE}/api/profiles/${profileId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ monthly_budget: budget || null }),
-    })
-    if (res.ok) {
-      await fetchProfileSummaries()
-      await fetchProfiles()
-    }
-  }
-
-  const fetchDailySummary = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/daily-summary?profileId=${pid}`)
-      const j = await res.json()
-      setDailySummary(j.today || null)
-    } catch {}
-  }
-
-  const startShift = async () => {
-    if (!selectedProfile) return setStatus('Choose a profile first')
-    setStatus('Requesting GPS permission...')
-    const granted = await requestPermission()
-    if (!granted) {
-      setStatus('GPS permission denied — cannot auto-track miles. You can still log mileage manually.')
-      return
-    }
-    setStatus('Starting shift...')
-    const res = await fetch(`${API_BASE}/api/shifts/start`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile_id: selectedProfile, purpose: shiftPurpose || 'DoorDash shift' }),
-    })
-    const j = await res.json()
-    if (j.shift) {
-      setActiveShift(j.shift)
-      setShiftElapsed(0)
-      setShiftMiles(0)
-      setStatus(`Shift started — ${j.shift.purpose || 'work shift'}` + (isNative() ? ' (tracking in background)' : ''))
-      const r = await fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
-      const rs = await r.json()
-      setRecentShifts(rs.shifts || [])
-    } else {
-      setStatus('Could not start shift')
-    }
-  }
-
-  const endShift = async () => {
-    if (!activeShift) return
-    setStatus(`Ending shift — ${shiftMiles.toFixed(1)} mi tracked. Saving...`)
-    const res = await fetch(`${API_BASE}/api/shifts/end`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ shift_id: activeShift.id, miles: Math.round(shiftMiles * 10) / 10 }),
-    })
-    const j = await res.json()
-    if (j.shift) {
-      setStatus(`Shift ended — ${Number(j.shift.miles || 0).toFixed(1)} mi logged for the day.`)
-      const summary = {
-        purpose: j.shift.purpose || 'Work shift',
-        miles: Number(j.shift.miles || 0),
-        deduction: Number(j.shift.miles || 0) * 0.67,
-      }
-      setLastShiftSummary(summary)
-      setActiveShift(null)
-      setShiftElapsed(0)
-      setShiftMiles(0)
-      await fetchDailySummary(selectedProfile)
-      const r = await fetch(`${API_BASE}/api/shifts?profileId=${selectedProfile}`)
-      const rs = await r.json()
-      setRecentShifts(rs.shifts || [])
-    } else {
-      setStatus('Could not end shift')
-    }
-  }
-
-  const shareShiftSummary = () => {
-    if (!lastShiftSummary) return
-    const text = `Fortress Hub — ${lastShiftSummary.purpose}\nMiles: ${lastShiftSummary.miles.toFixed(1)}\nEst. tax deduction: ${money(lastShiftSummary.deduction)}`
-    if (navigator.share) {
-      navigator.share({ title: 'Fortress Hub Shift', text }).catch(() => {})
-    } else if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).then(() => setStatus('Shift summary copied to clipboard'))
-    } else {
-      setStatus(text)
-    }
-  }
-
-  const toggleVoiceNote = () => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) {
-      setStatus('Voice notes not supported on this browser')
-      return
-    }
-    if (isRecording) {
-      recognitionRef.current && recognitionRef.current.stop()
-      setIsRecording(false)
-      return
-    }
-    const rec = new SR()
-    rec.lang = 'en-US'
-    rec.interimResults = false
-    recognitionRef.current = rec
-    rec.onresult = (e) => {
-      const text = e.results[0][0].transcript
-      setShiftPurpose(prev => prev ? prev + ' ' + text : text)
-      setIsRecording(false)
-    }
-    rec.onend = () => setIsRecording(false)
-    rec.onerror = () => setIsRecording(false)
-    rec.start()
-    setIsRecording(true)
-  }
-
-  const formatElapsed = (sec) => {
-    const h = Math.floor(sec / 3600)
-    const m = Math.floor((sec % 3600) / 60)
-    const s = sec % 60
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-  }
-
-  const uploadReceipt = async (event) => {
-    event.preventDefault()
-    if (!file) return setStatus('Please select a receipt file')
-    if (!selectedProfile) return setStatus('Please choose a profile before uploading')
-    setIsUploading(true)
-    setStatus(`Uploading receipt to ${profiles.find(p => p.id === selectedProfile)?.name || 'selected profile'}...`)
-
-    const form = new FormData()
-    form.append('receipt', file)
-    if (selectedProfile) form.append('profileId', selectedProfile)
-
-    const res = await fetch(`${API_BASE}/api/upload`, { method: 'POST', body: form })
-    const data = await res.json()
-    if (data.success) {
-      if (data.inline && data.receiptId) {
-        setShowDashboard(true)
-        setIsUploading(false)
-        setStatus('Receipt saved (queue unavailable, processed inline).')
-        await fetchProfileSummaries()
-        if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
-      } else {
-        setJobId(data.jobId)
-        setShowDashboard(true)
-        setStatus('Receipt uploaded. We are processing it now...')
-        if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
-        pollJob(data.jobId)
-      }
-    } else {
-      if (res.status === 409) {
-        setStatus('Duplicate receipt detected — this receipt already exists.')
-      } else {
-        setStatus('Upload failed: ' + (data.error || JSON.stringify(data)))
-      }
-      setIsUploading(false)
-    }
-  }
-
-  const pollJob = async (id) => {
-    setStatus('Working on it… the dashboard will refresh automatically when the receipt is ready.')
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`${API_BASE}/api/job/${id}`)
-        const data = await res.json()
-        if (data.error) {
-          clearInterval(interval)
-          setIsUploading(false)
-          setStatus('Error: ' + data.error)
-          return
-        }
-        if (!data.state || data.state === 'removed') {
-          clearInterval(interval)
-          setIsUploading(false)
-          setStatus('Job completed or removed from queue')
-          return
-        }
-        if (data.state === 'completed') {
-          clearInterval(interval)
-          setIsUploading(false)
-          setStatus('Receipt ready')
-          if (data.result && data.result.receiptId) {
-            const rr = await fetch(`${API_BASE}/api/receipts/${data.result.receiptId}`)
-            const jr = await rr.json()
-            if (jr.receipt) {
-              setSelectedReceipt(jr.receipt)
-              setStatus(`Receipt saved — ${jr.receipt.vendor} ${money(jr.receipt.total)}`)
-              showToast(`✓ ${jr.receipt.vendor} saved`)
-              await fetchProfileSummaries()
-              if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
-            }
-          }
-        } else if (data.state === 'failed') {
-          clearInterval(interval)
-          setIsUploading(false)
-          setStatus('Job failed')
-        } else {
-          setStatus(`Job ${id} status: ${data.state}`)
-        }
-      } catch (e) {
-        clearInterval(interval)
-        setIsUploading(false)
-        setStatus('Polling error: ' + String(e))
-      }
-    }, 2000)
-  }
-
-  const openDashboard = async () => {
-    setShowDashboard(true)
-    if (!selectedProfile && profiles.length) {
-      setSelectedProfile(profiles[0].id)
-      await loadReceiptsForProfile(profiles[0].id)
-      return
-    }
-    if (selectedProfile) await loadReceiptsForProfile(selectedProfile)
-  }
-
-  const loadReceiptsForProfile = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/profiles/${pid}/receipts`)
-      const j = await res.json()
-      setDashboardReceipts(j.receipts || [])
-    } catch (e) { setDashboardReceipts([]) }
-  }
-
-  const exportCSV = async (pid) => {
-    window.open(`${API_BASE}/api/profiles/${pid}/export/csv`, '_blank')
-  }
-
-  const exportPDF = async (pid) => {
-    window.open(`${API_BASE}/api/profiles/${pid}/export/pdf`, '_blank')
-  }
-
-  const exportTax = async (pid) => {
-    window.open(`${API_BASE}/api/profiles/${pid}/export/tax`, '_blank')
-  }
-
-  const fetchMileage = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/mileage?profileId=${pid}`)
-      const j = await res.json()
-      setMileageLogs(j.mileage || [])
-    } catch {}
-  }
-
-  const addMileage = async () => {
-    if (!mileageForm.start_odometer && !mileageForm.end_odometer) return
-    const res = await fetch(`${API_BASE}/api/mileage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        profile_id: selectedProfile,
-        start_odometer: mileageForm.start_odometer ? Number(mileageForm.start_odometer) : null,
-        end_odometer: mileageForm.end_odometer ? Number(mileageForm.end_odometer) : null,
-        purpose: mileageForm.purpose || null,
-        project_name: mileageForm.project_name || null,
-      }),
-    })
-    if (res.ok) {
-      setMileageForm({ start_odometer: '', end_odometer: '', purpose: '', project_name: '' })
-      fetchMileage(selectedProfile)
-    }
-  }
-
-  const deleteProfile = async (id) => {
-    if (!confirm('Delete this profile and all its receipts?')) return
-    await fetch(`${API_BASE}/api/profiles/${id}`, { method: 'DELETE' })
-    if (selectedProfile === id) {
-      setSelectedProfile('')
-      setDashboardReceipts([])
-    }
-    await fetchProfiles()
-    await fetchProfileSummaries()
-  }
-
-  const deleteMileage = async (id) => {
-    await fetch(`${API_BASE}/api/mileage/${id}`, { method: 'DELETE' })
-    fetchMileage(selectedProfile)
-  }
-
-  const fetchProjects = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/projects?profileId=${pid}`)
-      const j = await res.json()
-      setProjects(j.projects || [])
-    } catch {}
-  }
-
-  const addProject = async () => {
-    if (!newProjectName) return
-    const res = await fetch(`${API_BASE}/api/projects`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: newProjectName, profile_id: selectedProfile }),
-    })
-    if (res.ok) {
-      setNewProjectName('')
-      fetchProjects(selectedProfile)
-    }
-  }
-
-  const deleteProject = async (id) => {
-    await fetch(`${API_BASE}/api/projects/${id}`, { method: 'DELETE' })
-    fetchProjects(selectedProfile)
-  }
-
-  const fetchTaxData = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/analytics/business-tax?profileId=${pid}`)
-      const j = await res.json()
-      setTaxData(j)
-    } catch {}
-  }
-
-  const fetchTrends = async (pid) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/analytics/spending-trends?profileId=${pid}&months=6`)
-      const j = await res.json()
-      setTrends(j.trends || [])
-    } catch {}
-  }
-
-  const openEditReceipt = (r) => {
-    setEditReceipt(r.id)
-    setEditForm({
-      vendor: r.vendor || '',
-      category: r.category || '',
-      is_business: r.is_business !== false,
-      business_notes: r.business_notes || '',
-      project_name: r.project_name || '',
-      tax_category: r.tax_category || '',
-    })
-  }
-
-  const saveEditReceipt = async () => {
-    const res = await fetch(`${API_BASE}/api/receipts/${editReceipt}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(editForm),
-    })
-    if (res.ok) {
-      setEditReceipt(null)
-      await loadReceiptsForProfile(selectedProfile)
-      await fetchProfileSummaries()
-    }
-  }
-
-  const deleteReceipt = async (id) => {
-    if (!confirm('Delete this receipt?')) return
-    const res = await fetch(`${API_BASE}/api/receipts/${id}`, { method: 'DELETE' })
-    if (res.ok) {
-      await loadReceiptsForProfile(selectedProfile)
-      await fetchProfileSummaries()
-    }
-  }
-
-  const selectedSummary = profileSummaries.find(p => p.id === selectedProfile) || null
-
-  const toggleMileage = async () => {
-    const next = !showMileage
-    setShowMileage(next)
-    if (next && selectedProfile) fetchMileage(selectedProfile)
-  }
-
-  const toggleProjects = async () => {
-    const next = !showProjects
-    setShowProjects(next)
-    if (next && selectedProfile) fetchProjects(selectedProfile)
-  }
-
-  const toggleTax = async () => {
-    const next = !showTax
-    setShowTax(next)
-    if (next && selectedProfile) fetchTaxData(selectedProfile)
-  }
-
-  const toggleTrends = async () => {
-    const next = !showTrends
-    setShowTrends(next)
-    if (next && selectedProfile) fetchTrends(selectedProfile)
-  }
-
-  const trendsByMonth = trends.reduce((acc, t) => {
-    const m = t.month ? t.month.slice(0, 7) : 'unknown'
-    if (!acc[m]) acc[m] = []
-    acc[m].push(t)
+  const globeGroupCounts = globePositions.reduce((acc, p) => {
+    const g = p.group || 'other'
+    acc[g] = (acc[g] || 0) + 1
     return acc
   }, {})
-
-  const chartMonths = (chartData || []).reduce((acc, t) => {
-    const m = t.month ? t.month.slice(0, 7) : 'unknown'
-    if (!acc[m]) acc[m] = 0
-    acc[m] += Number(t.total_spent || 0)
-    return acc
-  }, {})
-  const chartMonthKeys = Object.keys(chartMonths).slice(0, 6).reverse()
-  const chartMax = Math.max(1, ...chartMonthKeys.map(k => chartMonths[k]))
-  const chartTotal = chartMonthKeys.reduce((a, k) => a + chartMonths[k], 0)
-  const chartBars = chartMonthKeys.map(k => ({
-    month: k,
-    short: k.slice(5),
-    total: chartMonths[k],
-    pct: Math.max(3, (chartMonths[k] / chartMax) * 100),
-  }))
+  const globeConstellations = Object.keys(globeGroupCounts).length
 
   return (
     <div className="app" data-theme={theme}>
@@ -961,55 +624,165 @@ export default function App() {
         .app { color-scheme: light; }
         .app[data-theme='dark'] { color-scheme: dark; }
         .app {
-          --bg: #f5f6fa;
-          --bg-grad-1: #eef2f8;
-          --bg-grad-2: #f5f6fa;
-          --surface: #ffffff;
-          --surface-2: #f8fafc;
-          --surface-3: #f1f4f9;
-          --border: #e2e6ee;
-          --border-strong: #d2d8e3;
-          --text: #101828;
-          --text-2: #475467;
-          --text-3: #667085;
-          --accent: #4f6df5;
-          --accent-2: #6a8bff;
-          --accent-soft: rgba(79,109,245,0.10);
-          --accent-border: rgba(79,109,245,0.35);
-          --success: #16a34a;
-          --danger: #dc2626;
+          --bg: #eef1fb;
+          --bg-grad-1: #e6eaff;
+          --bg-grad-2: #eef1fb;
+          --surface: rgba(255,255,255,0.82);
+          --surface-2: rgba(248,250,255,0.9);
+          --surface-3: rgba(238,242,255,0.95);
+          --border: #dfe3f5;
+          --border-strong: #cdd3f0;
+          --text: #10162e;
+          --text-2: #4a5278;
+          --text-3: #6a7399;
+          --accent: #6a4ff5;
+          --accent-2: #8a5bff;
+          --accent-soft: rgba(106,79,245,0.10);
+          --accent-border: rgba(106,79,245,0.35);
+          --teal: #2dd4bf;
+          --gold: #f5b84f;
+          --success: #10b981;
+          --danger: #ef4444;
           --warn: #f59e0b;
-          --shadow-sm: 0 1px 3px rgba(16,24,40,0.06);
-          --shadow-md: 0 8px 24px rgba(16,24,40,0.08);
-          --shadow-lg: 0 20px 44px rgba(16,24,40,0.14);
-          --radius: 14px;
+          --shadow-sm: 0 1px 3px rgba(28,20,80,0.10);
+          --shadow-md: 0 8px 28px rgba(28,20,80,0.16);
+          --shadow-lg: 0 20px 48px rgba(28,20,80,0.26);
+          --radius: 16px;
         }
         .app[data-theme='dark'] {
-          --bg: #0b1017;
-          --bg-grad-1: #0d1420;
-          --bg-grad-2: #0b1017;
-          --surface: #141b26;
-          --surface-2: #1a2230;
-          --surface-3: #202a3a;
-          --border: #263140;
-          --border-strong: #334154;
-          --text: #e7ecf5;
-          --text-2: #b6c0cf;
-          --text-3: #8794a8;
-          --accent: #6a8bff;
-          --accent-2: #8aa4ff;
-          --accent-soft: rgba(106,139,255,0.14);
-          --accent-border: rgba(106,139,255,0.4);
-          --success: #22c55e;
+          --bg: #06030f;
+          --bg-grad-1: #0b0520;
+          --bg-grad-2: #06030f;
+          --surface: rgba(20,14,44,0.72);
+          --surface-2: rgba(28,20,60,0.78);
+          --surface-3: rgba(38,28,78,0.85);
+          --border: #2a1f52;
+          --border-strong: #3b2f6e;
+          --text: #ede7ff;
+          --text-2: #c2b6ee;
+          --text-3: #9489c9;
+          --accent: #8a5bff;
+          --accent-2: #b06aff;
+          --accent-soft: rgba(138,91,255,0.18);
+          --accent-border: rgba(138,91,255,0.45);
+          --teal: #2dd4bf;
+          --gold: #f5b84f;
+          --success: #34d399;
           --danger: #f87171;
           --warn: #fbbf24;
-          --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-          --shadow-md: 0 8px 24px rgba(0,0,0,0.4);
-          --shadow-lg: 0 20px 44px rgba(0,0,0,0.55);
+          --shadow-sm: 0 1px 3px rgba(0,0,0,0.4);
+          --shadow-md: 0 10px 34px rgba(80,20,200,0.28);
+          --shadow-lg: 0 24px 56px rgba(80,20,200,0.4);
         }
+        .app {
+          position: relative;
+          isolation: isolate;
+        }
+        .app::before {
+          content: '';
+          position: fixed; inset: 0; z-index: -2;
+          background:
+            radial-gradient(circle at 18% 12%, var(--bg-grad-1) 0%, transparent 46%),
+            radial-gradient(circle at 84% 8%, rgba(122,90,255,0.28) 0%, transparent 42%),
+            radial-gradient(circle at 70% 92%, rgba(45,212,191,0.18) 0%, transparent 46%),
+            var(--bg);
+        }
+        .app[data-theme='dark']::before {
+          background:
+            radial-gradient(circle at 18% 12%, rgba(74,32,160,0.5) 0%, transparent 46%),
+            radial-gradient(circle at 84% 8%, rgba(122,90,255,0.28) 0%, transparent 42%),
+            radial-gradient(circle at 40% 80%, rgba(45,120,160,0.22) 0%, transparent 50%),
+            radial-gradient(circle at 70% 92%, rgba(190,90,255,0.18) 0%, transparent 46%),
+            var(--bg);
+        }
+        .starfield { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+        .starfield i {
+          position: absolute; border-radius: 50%; background: #fff;
+          animation: starTwinkle var(--tw, 4s) ease-in-out infinite alternate;
+        }
+        .starfield i:nth-child(3n) { background: var(--teal); }
+        .starfield i:nth-child(4n) { background: var(--gold); }
+        @keyframes starTwinkle { from { opacity: 0.15; } to { opacity: 0.9; } }
+        .sphere { position: fixed; border-radius: 50%; pointer-events: none; z-index: -1; opacity: 0.7; filter: blur(0.2px); }
+        .sphere-1 { width: 150px; height: 150px; top: 12%; left: -40px; background: radial-gradient(circle at 32% 30%, #ffd9a0, #b06aff 55%, #4a2a7a 90%); box-shadow: inset -18px -16px 40px rgba(0,0,0,0.5), 0 0 40px rgba(176,106,255,0.35); }
+        .sphere-2 { width: 90px; height: 90px; top: 34%; right: 6%; background: radial-gradient(circle at 34% 30%, #b7f5ff, #2dd4bf 55%, #0b4a5a 92%); box-shadow: inset -12px -10px 28px rgba(0,0,0,0.5), 0 0 30px rgba(45,212,191,0.35); }
+        .orbit-ring { position: fixed; border-radius: 50%; pointer-events: none; z-index: -1; opacity: 0.5; }
+        .orbit-ring::after { content: ''; position: absolute; inset: -2px; border-radius: 50%; border: 1px dashed rgba(176,106,255,0.5); }
+        .sat-dot { position: absolute; width: 7px; height: 7px; border-radius: 50%; background: var(--gold); box-shadow: 0 0 8px 2px rgba(245,184,79,0.6); }
+        @keyframes orbitSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .app[data-theme='dark'] .sphere, .app[data-theme='dark'] .orbit-ring { opacity: 0.85; }
+        .app[data-theme='light'] .sphere-1 { opacity: 0.5; }
+        .app[data-theme='light'] .sphere-2 { opacity: 0.5; }
         .brand-sub { font-size: 11px; color: var(--text-3); font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
         .sanctuary-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; margin-bottom: 18px; }
-        .sanctuary-globe { position: relative; width: 100%; height: 420px; min-height: 320px; }
+        .jarv-chat { display: flex; flex-direction: column; height: 560px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); overflow: hidden; box-shadow: var(--shadow-sm); }
+        .jarv-chat-head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+        .jarv-chat-head .jarv-orb { width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 3px rgba(34,197,94,0.16); flex: none; }
+        .jarv-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-grad-1); }
+        .jarv-msg { max-width: 82%; padding: 9px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+        .jarv-msg.user { align-self: flex-end; background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #fff; border-bottom-right-radius: 4px; }
+        .jarv-msg.jarv { align-self: flex-start; background: var(--surface); border: 1px solid var(--border); border-bottom-left-radius: 4px; color: var(--text); }
+        .jarv-msg .jarv-meta { display: block; font-size: 10.5px; color: var(--text-3); margin-top: 5px; }
+        .jarv-typing { align-self: flex-start; color: var(--text-3); font-size: 13px; }
+        .jarv-compose { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+        .jarv-compose input { flex: 1; }
+        .jarv-suggest { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 12px; background: var(--surface); }
+        .jarv-suggest .chip { font-size: 11.5px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); cursor: pointer; }
+        .jarv-suggest .chip:hover { border-color: var(--accent-border); color: var(--text); }
+        @media (max-width: 700px) { .jarv-chat { height: 520px; } }
+        .ws-tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+        .ws-tab { padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+        .ws-tab[data-on='true'] { background: var(--accent); border-color: var(--accent); color: #fff; }
+        .cli-term { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; }
+        .cli-body { height: 320px; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 4px; }
+        .cli-line.in { color: #8b949e; white-space: pre-wrap; word-break: break-word; }
+        .cli-line.in::before { content: '❯ '; color: var(--success); font-weight: 700; }
+        .cli-line.out { color: #e6edf3; white-space: pre-wrap; word-break: break-word; }
+        .cli-line.err { color: #ff7b72; white-space: pre-wrap; word-break: break-word; }
+        .cli-foot { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid #30363d; background: #161b22; align-items: center; }
+        .cli-foot input { flex: 1; background: transparent; border: none; color: #e6edf3; font-family: inherit; font-size: 12.5px; padding: 4px 0; }
+        .cli-foot input::placeholder { color: #6e7681; }
+        .ide-split { display: grid; grid-template-columns: 200px 1fr; gap: 10px; }
+        .ide-tree { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 8px; max-height: 420px; overflow-y: auto; }
+        .ide-tree .file { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 7px; font-size: 12.5px; cursor: pointer; color: var(--text-2); }
+        .ide-tree .file:hover { background: var(--surface-3); color: var(--text); }
+        .ide-tree .file.active { background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--text); font-weight: 600; }
+        .ide-tree .file.dir { color: var(--accent); font-weight: 600; cursor: default; }
+        .ide-editor { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; background: var(--surface-2); }
+        .ide-editor textarea { width: 100%; min-height: 300px; flex: 1; resize: vertical; border: none; background: #0d1117; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; padding: 14px; outline: none; }
+        .ide-editor-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface); }
+        .ide-editor-bar .path { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--text-3); flex: 1; }
+        .ide-run { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; color: #8b949e; background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 10px 12px; margin-top: 10px; white-space: pre-wrap; min-height: 40px; }
+        .binary-note { padding: 14px 16px; font-size: 13px; color: var(--text); line-height: 1.55; background: color-mix(in srgb, var(--surface-3) 60%, transparent); border-bottom: 1px solid var(--border); }
+        .binary-note code { font-size: 11.5px; color: var(--text-2); word-break: break-all; }
+        .vibe-box { display: flex; flex-direction: column; gap: 10px; }
+        .vibe-prompt {
+          width: 100%; min-height: 96px; resize: vertical; border-radius: 12px;
+          border: 1px solid var(--border-strong); background: #0d1117; color: #e6edf3;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px;
+          line-height: 1.5; padding: 12px 14px; outline: none;
+        }
+        .vibe-prompt:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+        .vibe-suggests { display: flex; flex-wrap: wrap; gap: 6px; }
+        .vibe-log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55; background: #0d1117; color: #c9d1d9; border: 1px solid #30363d; border-radius: 12px; overflow: hidden; }
+        .vibe-log .vibe-body { max-height: 300px; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+        .vibe-line.in { color: #8b949e; white-space: pre-wrap; word-break: break-word; }
+        .vibe-line.in::before { content: '✦ '; color: var(--gold); font-weight: 700; }
+        .vibe-line.out { color: #e6edf3; white-space: pre-wrap; word-break: break-word; }
+        .vibe-line.code { color: #7ee787; white-space: pre-wrap; word-break: break-word; font-size: 12px; }
+        .vibe-line.err { color: #ff7b72; white-space: pre-wrap; word-break: break-word; }
+        .approval-bar { background: #1c2128; border: 1px solid var(--gold); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+        .approval-bar .btn-sm { font-size: 12px; }
+        .keys-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+        .key-card { border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); padding: 10px 12px; }
+        .key-card .k-name { font-size: 13px; font-weight: 700; color: var(--text); }
+        .key-card .k-env { font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 6px; display: inline-block; margin-top: 4px; word-break: break-all; }
+        .key-card .k-note { font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+        .key-card .k-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+        .key-card .k-link:hover { text-decoration: underline; }
+        @media (max-width: 700px) { .keys-grid { grid-template-columns: 1fr; } }
+        @media (max-width: 700px) { .ide-split { grid-template-columns: 1fr; } .cli-body { height: 240px; } }
+        .sanctuary-globe { position: relative; width: 100%; height: 440px; min-height: 320px; }
         .globe-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
         .globe-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
         .globe-overlay button { pointer-events: auto; }
@@ -1019,6 +792,9 @@ export default function App() {
         .legend-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
         .globe-count { position: absolute; bottom: 10px; left: 12px; font-size: 11px; }
         .globe-card { position: absolute; right: 12px; bottom: 10px; width: 230px; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; padding: 12px; box-shadow: var(--shadow-md); font-size: 12px; pointer-events: auto; }
+        .globe-card .row { display: flex; justify-content: space-between; padding: 2px 0; }
+        .globe-card .k { color: var(--text-3); }
+        .globe-card .v { font-weight: 700; }
         .location-readout { background: var(--surface-2); border: 1px dashed var(--accent-border); border-radius: 10px; padding: 10px 12px; margin-bottom: 4px; }
         .location-fix { font-weight: 800; font-size: 18px; letter-spacing: 0.01em; }
         @media (max-width: 900px) {
@@ -1103,14 +879,36 @@ export default function App() {
         .link-chip .link-dot.green { background: var(--success); box-shadow: 0 0 0 3px rgba(22,163,74,0.16); }
         .link-chip .link-dot.amber { background: var(--warn); box-shadow: 0 0 0 3px rgba(245,158,11,0.20); }
         .link-chip .link-dot.gray { background: var(--text-3); }
+        .galactic-nav {
+          display: flex; align-items: center; gap: 6px; justify-content: center;
+          margin: 14px auto 4px; max-width: 1100px; padding: 6px;
+          background: color-mix(in srgb, var(--surface-3) 96%, transparent);
+          border: 1px solid var(--border-strong);
+          border-radius: 999px; backdrop-filter: blur(18px) saturate(170%);
+          box-shadow: var(--shadow-sm); position: sticky; top: 68px; z-index: 40; width: fit-content;
+        }
+        .nav-seg { display: flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: 999px; font-size: 13px; font-weight: 700; color: var(--text-3); cursor: pointer; border: 1px solid transparent; background: transparent; transition: all 0.18s ease; white-space: nowrap; }
+        .nav-seg:hover { color: var(--text); background: var(--surface-3); }
+        .nav-seg[data-on='true'] { background: linear-gradient(180deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 4px 16px rgba(138,91,255,0.4); }
+        .nav-seg .nav-orb { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+        .nav-seg .nav-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .nav-seg .nav-dot.on { background: var(--success); box-shadow: 0 0 0 3px rgba(52,211,153,0.22); }
+        .nav-seg .nav-dot.off { background: var(--text-3); }
+        @media (max-width: 700px) {
+          .galactic-nav { flex-wrap: wrap; border-radius: 18px; top: auto; position: static; width: 100%; }
+          .nav-seg { flex: 1 1 auto; justify-content: center; padding: 8px 10px; font-size: 12px; }
+        }
+        .view-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 16px; }
+        .view-head .view-pill { width: 10px; height: 10px; border-radius: 50%; }
+        .view-head h2 { margin: 0; font-size: 21px; font-weight: 800; letter-spacing: 0.01em; }
+        .view-head .muted { margin-top: 1px; }
         .satline-banner { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); background: var(--surface-2); border: 1px dashed var(--border-strong); border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; }
         .container { max-width: 1100px; margin: 0 auto; padding: 22px; }
         .stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
-        .stat-card, .panel-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); transition: box-shadow 0.2s ease; }
+        .stat-card, .panel-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow-sm); transition: box-shadow 0.2s ease; backdrop-filter: blur(10px) saturate(150%); }
         .stat-card:hover { box-shadow: var(--shadow-md); }
         .stat-label { font-size: 12px; color: var(--text-3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
         .stat-value { font-size: 23px; font-weight: 800; margin-top: 4px; color: var(--text); }
-        .main-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
         .panel-card h2, .panel-card h3, .panel-card h4 { margin-top: 0; color: var(--text); font-size: 15px; font-weight: 700; }
         .panel-card label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
         .panel-card input, .panel-card select, .panel-card button, .panel-card textarea { font: inherit; font-size: 14px; }
@@ -1127,81 +925,17 @@ export default function App() {
         .btn-primary { border: none !important; background: linear-gradient(180deg, var(--accent), var(--accent-2)) !important; color: #ffffff !important; font-weight: 600; }
         .btn-primary:hover { background: linear-gradient(180deg, var(--accent), var(--accent-2)) !important; filter: brightness(1.08); color: #fff !important; }
         .btn-sm { font-size: 12px; padding: 6px 10px; }
-        .btn-danger { border-color: rgba(220,38,38,0.4) !important; color: var(--danger) !important; }
-        .btn-danger:hover { background: rgba(220,38,38,0.08) !important; }
-        .btn-warn { border-color: rgba(245,158,11,0.4) !important; color: var(--warn) !important; }
-        .btn-warn:hover { background: rgba(245,158,11,0.08) !important; }
         .status-box { margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--text); }
-        .shift-panel {
-          background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm);
-        }
-        .shift-start {
-          border: none; background: linear-gradient(180deg, #22c55e, #16a34a); color: #ffffff; padding: 11px 20px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; transition: filter 0.15s;
-        }
-        .shift-start:hover { filter: brightness(1.08); }
-        .shift-end {
-          border: none; background: linear-gradient(180deg, #f87171, #dc2626); color: #ffffff; padding: 11px 20px; border-radius: 10px; cursor: pointer; font-size: 15px; font-weight: 600; transition: filter 0.15s;
-        }
-        .shift-end:hover { filter: brightness(1.08); }
-        .profile-list button, .receipt-item {
-          width: 100%; text-align: left; border: 1px solid var(--border); background: var(--surface); border-radius: 11px; padding: 13px; cursor: pointer; color: var(--text); margin-bottom: 9px; box-shadow: var(--shadow-sm); transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
-        }
-        .profile-list button:hover { border-color: var(--accent); box-shadow: var(--shadow-md); }
-        .profile-list button.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-        .receipt-item { cursor: default; }
         .muted { color: var(--text-3); font-size: 13px; }
         .flex { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
         .flex-between { display: flex; justify-content: space-between; align-items: center; }
         .mb-8 { margin-bottom: 8px; }
         .mt-8 { margin-top: 8px; }
-        .budget-bar { height: 8px; border-radius: 4px; background: var(--surface-3); margin-top: 4px; overflow: hidden; }
-        .budget-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
-        .budget-ok { background: var(--success); }
-        .budget-warn { background: var(--warn); }
-        .budget-danger { background: var(--danger); }
-        .tag { display: inline-block; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border-strong); font-size: 11px; background: var(--surface-2); color: var(--text-2); }
-        .tag-green { border-color: rgba(34,197,94,0.4); background: rgba(34,197,94,0.1); color: var(--success); }
-        .tag-deductible { border-color: rgba(34,197,94,0.5); background: rgba(34,197,94,0.12); color: var(--success); font-weight: 600; }
-        .tag-partial { border-color: rgba(245,158,11,0.5); background: rgba(245,158,11,0.12); color: var(--warn); font-weight: 600; }
-        .tag-personal { border-color: rgba(148,163,184,0.5); background: rgba(148,163,184,0.12); color: var(--text-2); font-weight: 600; }
-        .share-card {
-          margin-top: 12px; padding: 14px; border-radius: 12px; background: var(--accent-soft); border: 1px solid var(--accent-border);
-        }
-        .share-card .row { display: flex; justify-content: space-between; padding: 3px 0; font-size: 14px; }
-        .share-card .row .k { color: var(--text-3); }
-        .share-card .row .v { font-weight: 700; }
-        .mic-btn { cursor: pointer; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-2); border-radius: 9px; padding: 8px 12px; font-size: 14px; }
-        .mic-btn.recording { border-color: var(--danger); color: var(--danger); animation: pulse 1.2s infinite; }
-        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.5 } }
-        .modal-overlay {
-          position: fixed; inset: 0; background: rgba(16,24,40,0.5); display: flex; align-items: center; justify-content: center; z-index: 100;
-        }
-        .modal {
-          background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 26px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-lg);
-        }
-        .modal h3 { margin-top: 0; }
         .theme-toggle { display: flex; align-items: center; gap: 8px; }
         .theme-toggle .toggle-track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border-strong); position: relative; cursor: pointer; transition: background 0.2s; }
         .theme-toggle .toggle-track[data-on='true'] { background: var(--accent); }
         .theme-toggle .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left 0.2s; }
         .theme-toggle .toggle-track[data-on='true'] .toggle-thumb { left: 22px; }
-        .hero-card {
-          background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow-sm);
-        }
-        .chart { display: flex; align-items: flex-end; gap: 10px; height: 130px; margin-top: 8px; }
-        .chart-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; }
-        .chart-bar-track { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
-        .chart-bar {
-          width: 60%; background: linear-gradient(180deg, var(--accent-2), var(--accent)); border-radius: 6px 6px 0 0;
-          animation: grow 0.6s ease;
-          min-height: 3px;
-        }
-        @keyframes grow { from { height: 0 } }
-        .chart-label { font-size: 11px; color: var(--text-3); }
-        .empty-state { text-align: center; padding: 32px 16px; color: var(--text-3); }
-        .empty-state svg { opacity: 0.5; margin-bottom: 12px; }
-        .empty-state .es-title { font-size: 16px; font-weight: 700; color: var(--text-2); margin-bottom: 4px; }
-        .empty-state .es-sub { font-size: 13px; }
         .toast {
           position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
           background: var(--text); color: var(--surface); padding: 10px 18px; border-radius: 10px;
@@ -1209,12 +943,7 @@ export default function App() {
           animation: toastIn 0.25s ease;
         }
         @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 10px) } to { opacity: 1; transform: translate(-50%, 0) } }
-        .theme-toggle .toggle-track { width: 44px; height: 24px; border-radius: 999px; background: var(--surface-3); border: 1px solid var(--border-strong); position: relative; cursor: pointer; transition: background 0.2s; }
-        .theme-toggle .toggle-track[data-on='true'] { background: var(--accent); }
-        .theme-toggle .toggle-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left 0.2s; }
-        .theme-toggle .toggle-track[data-on='true'] .toggle-thumb { left: 22px; }
         @media (max-width: 900px) {
-          .main-grid { grid-template-columns: 1fr; }
           .stats-grid { grid-template-columns: repeat(2, 1fr); }
           .container { padding: 14px; }
         }
@@ -1224,16 +953,27 @@ export default function App() {
           .stat-value { font-size: 19px; }
           .panel-card { padding: 14px; }
           .panel-card input, .panel-card select, .panel-card button { font-size: 15px; padding: 10px; }
-          .profile-list button, .receipt-item { padding: 13px; }
           .app-header { padding: 12px 16px; }
           .app-header h1 { font-size: 17px; }
-          .modal { padding: 20px; width: 95%; }
         }
         @media (hover: none) and (pointer: coarse) {
-          .panel-card button, .profile-list button, .btn-sm { min-height: 44px; }
+          .panel-card button, .btn-sm { min-height: 44px; }
           .panel-card input, .panel-card select, .panel-card textarea { min-height: 44px; font-size: 16px; }
         }
       `}</style>
+      <div className="starfield">
+        {STARS.map((s, i) => (
+          <i key={i} style={{ left: `${s.left}%`, top: `${s.top}%`, width: s.size, height: s.size, '--tw': s.tw }} />
+        ))}
+      </div>
+      <div className="sphere sphere-1" />
+      <div className="sphere sphere-2" />
+      <div className="orbit-ring" style={{ width: 340, height: 340, left: '82%', top: '18%' }}>
+        <div className="sat-dot" style={{ top: '4%', left: '50%' }} />
+      </div>
+      <div className="orbit-ring" style={{ width: 190, height: 190, left: '6%', top: '64%' }}>
+        <div className="sat-dot" style={{ top: '50%', left: '94%' }} />
+      </div>
       {!user ? (
         <div className="auth-screen">
           <div className="auth-card">
@@ -1314,7 +1054,7 @@ export default function App() {
           </div>
           <div className="user-chip">
             <span className="user-email">{user.email}</span>
-            <button className="btn-sm" onClick={() => setShowSettings(!showSettings)}>
+            <button className="btn-sm" onClick={() => { setShowSettings(!showSettings); if (!showSettings) { loadKeys(); loadWorkspace() } }}>
               {showSettings ? 'Close' : 'Settings'}
             </button>
             <button className="btn-sm" onClick={logout}>Sign Out</button>
@@ -1340,9 +1080,117 @@ export default function App() {
                   <div className="toggle-track" data-on={theme === 'dark'}><div className="toggle-thumb" /></div>
                 </div>
               </div>
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0 14px', paddingTop: 14 }}>
+                <div className="flex-between" style={{ marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>Cloud API keys</div>
+                    <div className="muted">JARV falls back across these keyed providers when local Ollama is unavailable. Keys are stored in <code>{KEYS_DEST}</code> and activate immediately. Leave a field blank to keep its current value; enter a blank "spacer" to clear.</div>
+                  </div>
+                  <button className="btn-sm" onClick={() => loadKeys()} disabled={keysBusy}>Refresh</button>
+                </div>
+
+                {keyProviders.length === 0 && (
+                  <div className="muted" style={{ fontSize: 13, padding: '10px 0' }}>Loading providers…</div>
+                )}
+
+                <div className="keys-grid">
+                  {keyProviders.map(p => (
+                    <div className="key-card" key={p.env}>
+                      <div className="flex-between" style={{ marginBottom: 6, gap: 8 }}>
+                        <span style={{ fontWeight: 600, fontSize: 13 }}>{p.name}</span>
+                        <span style={{ fontSize: 11 }} className={`link-dot ${p.set ? 'green' : 'gray'}`} title={p.set ? `Configured (${p.masked})` : 'Not set'} />
+                      </div>
+                      <div className="muted" style={{ fontSize: 11, marginBottom: 8 }}>{p.note || ''} · {p.env}{p.set ? ` · ${p.masked}` : ''}</div>
+                      <div className="flex" style={{ gap: 6 }}>
+                        <input
+                          type="password"
+                          placeholder={p.set ? '•••••••• (leave blank to keep)' : 'Paste API key'}
+                          value={keyInputs[p.env] || ''}
+                          onChange={e => setKeyInputs({ ...keyInputs, [p.env]: e.target.value })}
+                          autoComplete="off"
+                          style={{ flex: 1 }}
+                        />
+                        {p.url && <a className="btn-sm" href={p.url} target="_blank" rel="noreferrer" style={{ whiteSpace: 'nowrap' }}>Get key</a>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex-between" style={{ marginTop: 14, gap: 12 }}>
+                  <button className="btn-sm" onClick={() => { setKeyInputs({}); setKeyStatus('') }}>Clear drafts</button>
+                  <button className="btn-primary btn-sm" onClick={saveKeys} disabled={keysBusy}>
+                    {keysBusy ? 'Saving…' : 'Save keys'}
+                  </button>
+                </div>
+                {keyStatus && <div className="status-box" style={{ marginTop: 10, fontSize: 12 }}>{keyStatus}</div>}
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0 14px', paddingTop: 14 }}>
+                <div className="flex-between" style={{ marginBottom: 6 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>JARV workspace &amp; autonomy</div>
+                    <div className="muted">Where JARV codes, and how much he may do on his own. The "ask first" level surfaces an approve prompt in the Vibe Code / Terminal tabs.</div>
+                  </div>
+                  <button className="btn-sm" onClick={() => loadWorkspace()}>Refresh</button>
+                </div>
+
+                <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                  Workspace root: <code style={{ wordBreak: 'break-all' }}>{workspace ? workspace.sandboxRoot : '…'}</code>
+                  {workspace && workspace.sessionTools && workspace.sessionTools.length > 0 && (
+                    <span className="link-chip" style={{ marginLeft: 8, fontSize: 11 }}>session-approved: {workspace.sessionTools.join(', ')}</span>
+                  )}
+                </div>
+
+                <div className="flex-between" style={{ marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>Autonomous shell</div>
+                    <div className="muted" style={{ fontSize: 11 }}>Allow jarv_run without asking (still allowlisted; no rm/sudo). "Allow all" in a prompt sets this permanently.</div>
+                  </div>
+                  <div className="theme-toggle" onClick={() => setAutoShell(!autoShell)}>
+                    <span style={{ fontSize: 13 }}>{autoShell ? 'On' : 'Off'}</span>
+                    <div className="toggle-track" data-on={autoShell}><div className="toggle-thumb" /></div>
+                  </div>
+                </div>
+
+                <div className="flex-between" style={{ marginBottom: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13 }}>Network access</div>
+                    <div className="muted" style={{ fontSize: 11 }}>Allow curl/wget inside jarv_run — JARV can reach the internet when running shell.</div>
+                  </div>
+                  <div className="theme-toggle" onClick={() => setAutoNet(!autoNet)}>
+                    <span style={{ fontSize: 13 }}>{autoNet ? 'On' : 'Off'}</span>
+                    <div className="toggle-track" data-on={autoNet}><div className="toggle-thumb" /></div>
+                  </div>
+                </div>
+
+                <div className="flex" style={{ gap: 8, marginTop: 10 }}>
+                  <button className="btn-sm btn-primary" onClick={saveAutonomy} disabled={!workspace}>Save autonomy</button>
+                  <button className="btn-sm" onClick={resetSessionApprovals} disabled={!workspace}>Clear session approval</button>
+                </div>
+                {autoStatus && <div className="status-box" style={{ marginTop: 10, fontSize: 12 }}>{autoStatus}</div>}
+              </div>
             </div>
           )}
 
+        <div className="galactic-nav" role="tablist" aria-label="Fortress Hub command center">
+          {VIEWS.map(v => (
+            <button key={v.id} role="tab" aria-selected={view === v.id} className="nav-seg" data-on={view === v.id} onClick={() => setView(v.id)}>
+              <span className="nav-orb">{v.icon === '◍' ? '' : v.icon}</span>
+              <span>{v.label}</span>
+              <span className={`nav-dot ${v.id === 'command' || v.id === 'forge' ? 'on' : (comms && comms.ai ? 'on' : 'off')}`} style={{ display: 'none' }} />
+            </button>
+          ))}
+        </div>
+
+        {view === 'gods-eye' && (<>
+        <div className="view-head">
+          <span className="view-pill" style={{ background: 'var(--accent)', boxShadow: '0 0 12px var(--accent)' }} />
+          <div>
+            <h2>God's Eye — Global Orbital OSINT</h2>
+            <div className="muted">Live Earth globe · satellite constellations · your grid fix, projected from where you are.</div>
+          </div>
+        </div>
         <div className="sanctuary-grid">
           <div className="panel-card">
             <div className="flex-between" style={{ marginBottom: 6 }}>
@@ -1371,510 +1219,340 @@ export default function App() {
             </div>
             {locError && <div className="status-box" style={{ marginTop: 8, color: '#b42318', background: '#fef3f2', fontSize: 12 }}>{locError}</div>}
           </div>
+        </div>
+        </>)}
 
-          <div className="panel-card" style={{ padding: 0, overflow: 'hidden' }}>
-            <div className="flex-between" style={{ padding: '14px 16px 0' }}>
-              <h2 style={{ margin: 0, fontSize: 15 }}>Sanctuary Wire</h2>
-              <button className="btn-sm" onClick={loadGlobe} disabled={globeLoading}>{globeLoading ? 'Projecting…' : 'Refresh Grid'}</button>
-            </div>
-            <div className="muted" style={{ fontSize: 12, padding: '4px 16px 8px' }}>
-              Global OSINT projection — every tracked satellite, positioned live by OrbitDeck.
-            </div>
-            <SanctuaryGlobe positions={globePositions} hubLocation={hubLocation} />
-            {globeError && <div className="status-box" style={{ margin: 10, fontSize: 12 }}>Globe: {globeError}</div>}
+        {view === 'command' && (<>
+        <div className="view-head">
+          <span className="view-pill" style={{ background: 'var(--success)', boxShadow: '0 0 12px var(--success)' }} />
+          <div>
+            <h2>Command Core</h2>
+            <div className="muted">JARV's mind — chat driven by the local-first LLM, routed over the Genie mesh with free-provider failover.</div>
           </div>
         </div>
-
-        <div className="stats-grid">
-          <div className="stat-card">
-            <div className="stat-label">Vaults</div>
-            <div className="stat-value">{profileSummaries.length}</div>
+        <div className="panel-card" style={{ marginBottom: 18 }}>
+          <div className="flex-between" style={{ marginBottom: 8 }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>JARV Command Center</h2>
+            <span className="link-chip" title="Talk to JARV — sat OSINT, location, shipping, field intel. Runs over the Genie mesh.">
+              <span className={`link-dot ${comms && comms.ai ? 'green' : 'gray'}`} style={{ display: 'inline-block' }} />
+              <span>{chatMsgs.length ? `${chatMsgs.length} messages` : 'live relay'}</span>
+            </span>
           </div>
-          <div className="stat-card">
-            <div className="stat-label">Entry Vaults</div>
-            <div className="stat-value">{profileSummaries.reduce((acc, p) => acc + Number(p.receipt_count || 0), 0)}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Allocated</div>
-            <div className="stat-value">{money(profileSummaries.reduce((acc, p) => acc + Number(p.total_spent || 0), 0))}</div>
-          </div>
-          <div className="stat-card">
-            <div className="stat-label">Budget Used</div>
-            <div className="stat-value">
-              {(() => {
-                const withBudget = profileSummaries.filter(p => p.monthly_budget)
-                if (!withBudget.length) return '—'
-                const avg = withBudget.reduce((a, p) => a + (p.budget_used_pct || 0), 0) / withBudget.length
-                return `${Math.round(avg)}%`
-              })()}
-            </div>
-          </div>
-        </div>
-
-        {chartData && chartData.length > 0 && (
-          <div className="hero-card" style={{ marginBottom: 16 }}>
-            <div className="flex-between" style={{ marginBottom: 12 }}>
-              <div>
-                <div style={{ fontWeight: 700, fontSize: 16 }}>Ledger Overview</div>
-                <div className="muted">Last 6 months • all profiles</div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontWeight: 800, fontSize: 20 }}>{money(chartTotal)}</div>
-                <div className="muted">6-month total</div>
+          {comms && comms.ai && (
+            <div className="ai-relay" style={{ fontSize: 11.5, marginBottom: 10, padding: '8px 12px', background: 'var(--surface-2)', border: '1px solid var(--border)', borderRadius: 10, color: 'var(--text-3)' }}>
+              <div className="ai-relay-row" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 700, color: 'var(--text)' }}>AI relay</span>
+                <span className="link-chip" style={{ fontSize: 11 }}>
+                  <span className="link-dot green" style={{ display: 'inline-block' }} />
+                  answering now: <strong>{comms.ai.lastProviderUsed || comms.ai.provider || 'idle'}</strong>
+                  {comms.ai.lastModelUsed ? ` · ${comms.ai.lastModelUsed}` : ''}
+                </span>
+                <span className="muted" style={{ fontSize: 11 }}>failover chain:</span>
+                {(comms.ai.providers || []).map((p, i) => {
+                  const h = comms.ai.providerHealth && comms.ai.providerHealth[p]
+                  const cooling = h && h.cooling
+                  const answered = p === (comms.ai.lastProviderUsed)
+                  return (
+                    <span key={p} className="link-chip" style={{ fontSize: 10.5, padding: '2px 8px', borderColor: answered ? 'var(--accent-border)' : 'var(--border)', color: answered ? 'var(--text)' : 'var(--text-3)', boxShadow: answered ? '0 0 0 2px var(--accent-soft)' : 'none' }}>
+                      {answered ? '●' : cooling ? '◌' : '·'} {p}
+                      {cooling ? ' (cooling)' : ''}
+                      {answered ? ' ←live' : ''}
+                    </span>
+                  )
+                })}
               </div>
             </div>
-            <div className="chart">
-              {chartBars.map((b, i) => (
-                <div key={i} className="chart-col" title={`${b.month}: ${money(b.total)}`}>
-                  <div className="chart-bar-track">
-                    <div className="chart-bar" style={{ height: `${b.pct}%` }} />
-                  </div>
-                  <div className="chart-label">{b.short}</div>
+          )}
+          <div className="jarv-chat">
+            <div className="jarv-chat-head">
+              <span className="jarv-orb" />
+              <span style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--text)' }}>JARV</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>
+                {chatMsgs.length ? 'in session' : 'synced — ask anything'}
+                {comms && comms.ai ? ` · brain: ${comms.ai.lastModelUsed || (comms.ai.localModels && comms.ai.localModels[0]) || comms.ai.provider || 'local'}` : ''}
+              </span>
+            </div>
+            <div className="jarv-body">
+              {chatMsgs.length === 0 && !chatLoading && (
+                <div className="muted" style={{ fontSize: 12.5, alignSelf: 'center', textAlign: 'center', padding: '20px 0' }}>
+                  Command center ready. Ask JARV to scan the sky, check your grid fix,
+                  <br />or run field intel — it answers from local relays.
+                </div>
+              )}
+              {chatMsgs.map((m, i) => (
+                <div key={i} className={`jarv-msg ${m.role}`}>
+                  {m.text}
+                  {m.meta && <span className="jarv-meta">{m.meta}</span>}
                 </div>
               ))}
+              {chatLoading && <div className="jarv-typing">JARV is thinking…</div>}
+              <div ref={chatEndRef} />
             </div>
-          </div>
-        )}
-
-        <div className="shift-panel" style={{ marginBottom: 16 }}>
-          <div className="flex-between" style={{ marginBottom: 10 }}>
-            <h2 style={{ margin: 0, fontSize: 15 }}>Field Ops Tracker</h2>
-            {dailySummary && !activeShift && (
-              <span className="muted">Today: {money(dailySummary.spend)} • {dailySummary.miles} mi</span>
+            <div className="jarv-compose">
+              <input
+                placeholder="Talk to JARV…"
+                value={chatInput}
+                onChange={e => setChatInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && sendJarvMessage()}
+                disabled={chatLoading}
+              />
+              <button className="btn-primary" onClick={sendJarvMessage} disabled={chatLoading || !chatInput.trim()}>
+                Send
+              </button>
+            </div>
+            {chatMsgs.length === 0 && (
+              <div className="jarv-suggest">
+                {['What satellites are overhead right now?', 'How do I contact a satellite manually?', 'Where is the family grid fix centered?', 'Give me tonight\'s overhead pass predictions'].
+                  map(s => (
+                    <button key={s} className="chip" onClick={() => { setChatInput(s); setChatMsgs([]) }}>{s}</button>
+                  ))}
+              </div>
             )}
           </div>
-
-          {!activeShift ? (
-            <div>
-              <div className="flex" style={{ gap: 8, alignItems: 'stretch' }}>
-                <input
-                  placeholder="Shift purpose (e.g. DoorDash lunch rush)"
-                  value={shiftPurpose}
-                  onChange={e => setShiftPurpose(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button onClick={toggleVoiceNote} className={`mic-btn ${isRecording ? 'recording' : ''}`} title="Speak the shift purpose">
-                  {isRecording ? '● Listening…' : '🎤'}
-                </button>
-                <button onClick={startShift} className="shift-start" style={{ whiteSpace: 'nowrap' }}>▶ Start Shift</button>
-              </div>
-              {lastShiftSummary && !activeShift && (
-                <div className="share-card">
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>Last shift logged</div>
-                  <div className="row"><span className="k">Purpose</span><span className="v">{lastShiftSummary.purpose}</span></div>
-                  <div className="row"><span className="k">Miles</span><span className="v">{lastShiftSummary.miles.toFixed(1)} mi</span></div>
-                  <div className="row"><span className="k">Est. deduction</span><span className="v">{money(lastShiftSummary.deduction)}</span></div>
-                  <button className="btn-sm btn-primary" style={{ marginTop: 10, width: '100%' }} onClick={shareShiftSummary}>Share Summary</button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <div className="flex" style={{ gap: 16, marginBottom: 10 }}>
-                <div className="stat-card" style={{ flex: 1 }}>
-                  <div className="stat-label">Elapsed</div>
-                  <div className="stat-value" style={{ fontSize: 22 }}>{formatElapsed(shiftElapsed)}</div>
-                </div>
-                <div className="stat-card" style={{ flex: 1 }}>
-                  <div className="stat-label">Miles (GPS)</div>
-                  <div className="stat-value" style={{ fontSize: 22 }}>{shiftMiles.toFixed(1)}</div>
-                </div>
-                <div className="stat-card" style={{ flex: 1 }}>
-                  <div className="stat-label">Est. Deduction</div>
-                  <div className="stat-value" style={{ fontSize: 22 }}>{money(shiftMiles * 0.67)}</div>
-                </div>
-              </div>
-              <button onClick={endShift} className="shift-end" style={{ width: '100%', whiteSpace: 'nowrap' }}>■ End Shift & Log Miles</button>
-            </div>
-          )}
-
-          {recentShifts.length > 0 && !activeShift && (
-            <div className="muted" style={{ marginTop: 8 }}>
-              Last: {recentShifts.slice(0, 3).map(s => `${s.purpose || 'shift'} (${Number(s.miles || 0).toFixed(1)}mi)`).join(' • ')}
-            </div>
-          )}
         </div>
+        </>)}
 
-        <div className="main-grid">
-          <div className="panel-card">
-            <h2>Add Ledger Entry</h2>
-            <form onSubmit={uploadReceipt}>
-              <div style={{ marginBottom: 10 }}>
-                <label>Profile</label>
-                <select value={selectedProfile} onChange={e => selectProfile(e.target.value)}>
-                  <option value="">(none)</option>
-                  {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
-              </div>
-              <div style={{ marginBottom: 10 }}>
-                <label>New profile</label>
-                <div className="flex">
-                  <input placeholder="Vault name" value={newProfile} onChange={e => setNewProfile(e.target.value)} style={{ flex: 1 }} />
-                  <input placeholder="Budget" type="number" value={newBudget} onChange={e => setNewBudget(e.target.value)} style={{ width: 100 }} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-                <button type="button" onClick={createProfile}>Create Profile</button>
-                <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '9px 11px', borderRadius: 8, border: '1px solid #d0d5dd', background: '#ffffff', cursor: 'pointer', color: '#344054' }}>
-                  <span>{file ? file.name : 'Choose file'}</span>
-                  <input type="file" accept="image/*,.pdf" onChange={e => setFile(e.target.files[0])} style={{ display: 'none' }} />
-                </label>
-              </div>
-              <button type="submit" disabled={isUploading}>{isUploading ? 'Processing…' : 'Upload'}</button>
-            </form>
-            <div className="status-box">
-              <strong>Status:</strong> {status}
-            </div>
-            {jobId && <div className="muted" style={{ marginTop: 8 }}>Job ID: {jobId}</div>}
-            {selectedReceipt && (
-              <div className="status-box" style={{ marginTop: 14 }}>
-                <h3>Latest Receipt</h3>
-                <div><strong>Vendor:</strong> {selectedReceipt.vendor}</div>
-                <div><strong>Date:</strong> {selectedReceipt.date}</div>
-                <div><strong>Total:</strong> {money(selectedReceipt.total)}</div>
-                {selectedReceipt.category && <div><strong>Category:</strong> <span className="tag">{selectedReceipt.category}</span></div>}
-                {selectedReceipt.confidence_score && <div><strong>Confidence:</strong> {selectedReceipt.confidence_score}%</div>}
-              </div>
-            )}
+        {view === 'forge' && (<>
+        <div className="view-head">
+          <span className="view-pill" style={{ background: 'var(--gold)', boxShadow: '0 0 12px var(--gold)' }} />
+          <div>
+            <h2>Code Forge</h2>
+            <div className="muted">JARV's hands — sandboxed terminal, IDE, and the MCP server AI coding clients plug into (MoltenJarv on Telegram can drive the same tools).</div>
+          </div>
+        </div>
+        <div className="panel-card" style={{ marginBottom: 16 }}>
+          <div className="flex-between" style={{ marginBottom: 6 }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>Coding Workspace — JARV Hub Developer</h2>
+            <span className="link-chip" title="Code right from the hub: sandboxed terminal + editor, exposed to AI clients over MCP.">
+              <span className="link-dot green" style={{ display: 'inline-block' }} />
+              <span>cli · mcp · ide</span>
+            </span>
+          </div>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+            Workspace ({workspace ? workspace.sandboxRoot : 'backend/jarv-sandbox'}). Run via <strong>Terminal</strong> or edit files in the <strong>IDE</strong> — also reachable by any MCP client at <code>http://&lt;this-mac&gt;:4002/api/jarv/mcp</code>. Write/edit/run ask for approval.
+          </div>
+          <div className="ws-tabs">
+            <button className="ws-tab" data-on={forgeTab === 'vibe'} onClick={() => setForgeTab('vibe')}>Vibe Code</button>
+            <button className="ws-tab" data-on={forgeTab === 'ide'} onClick={() => setForgeTab('ide')}>Scripts (IDE)</button>
+            <button className="ws-tab" data-on={forgeTab === 'cli'} onClick={() => setForgeTab('cli')}>Terminal (CLI)</button>
+            <button className="ws-tab" data-on={forgeTab === 'keys'} onClick={() => setForgeTab('keys')}>Provider Keys</button>
           </div>
 
-          <div className="panel-card">
-            <div className="flex-between mb-8">
-              <h2>Dashboard</h2>
-              <button onClick={openDashboard}>{showDashboard ? 'Refresh' : 'Open'}</button>
-            </div>
-
-            {selectedSummary && (
-              <div className="status-box" style={{ marginBottom: 12 }}>
-                <div className="flex-between">
-                  <strong>{selectedSummary.name}</strong>
-                  {selectedSummary.monthly_budget && (
-                    <span className="tag tag-green">Budget: {money(selectedSummary.monthly_budget)}</span>
+          {forgeTab === 'cli' && (
+            <>
+              <div className="cli-term">
+                <div className="cli-body">
+                  {cliLines.length === 0 && !cliBusy && (
+                    <div className="cli-line out" style={{ color: '#8b949e' }}>
+                      JARV Hub terminal — type a command.
+                      {`\nCommands: jarv_list, jarv_read &lt;file&gt;, jarv_run &lt;cmd&gt;, jarv_write &lt;path&gt; &lt;content&gt;,`}
+                      {`\n  jarv_satvision, jarv_globe, jarv_location, jarv_osint_handbook.`}
+                      {`\nFree text (no command) talks to the JARV agent.`}
+                    </div>
                   )}
+                  {cliLines.map((l, i) => <div key={i} className={`cli-line ${l.kind}`}>{l.text}</div>)}
+                  {cliBusy && <div className="cli-line out" style={{ color: '#8b949e' }}>running…</div>}
+                  <div ref={cliEndRef} />
                 </div>
-                <div className="mt-8">
-                  Receipts: {selectedSummary.receipt_count || 0} • Total: {money(selectedSummary.total_spent || 0)}
-                </div>
-                {selectedSummary.monthly_spent !== undefined && (
-                  <div className="mt-8">
-                    <span>This month: {money(selectedSummary.monthly_spent)}</span>
-                    {selectedSummary.budget_used_pct !== null && (
-                      <>
-                        <div className="budget-bar">
-                          <div className={`budget-fill ${selectedSummary.budget_used_pct >= 90 ? 'budget-danger' : selectedSummary.budget_used_pct >= 70 ? 'budget-warn' : 'budget-ok'}`}
-                               style={{ width: `${Math.min(100, selectedSummary.budget_used_pct)}%` }} />
-                        </div>
-                        <div className="flex-between mt-8">
-                          <span className="muted">{selectedSummary.budget_used_pct}% used</span>
-                          <span className="muted">{money(selectedSummary.budget_remaining)} remaining</span>
-                        </div>
-                      </>
-                    )}
+                {cliPending && (
+                  <div className="approval-bar">
+                    <div className="flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: 12 }}>Approve {cliPending.needsApproval.map(t => t.name.replace('jarv_', '')).join(', ')}?</span>
+                      <span className="muted" style={{ fontSize: 11 }}>write/edit mutate workspace files; run executes shell (allowlisted).</span>
+                    </div>
+                    <div className="flex" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      <button className="btn-sm" onClick={() => runCli('once')} disabled={cliBusy}>Allow once</button>
+                      <button className="btn-sm" onClick={() => runCli('session')} disabled={cliBusy}>Allow this session</button>
+                      <button className="btn-sm" onClick={() => runCli('all')} disabled={cliBusy}>Allow all</button>
+                      <button className="btn-sm" onClick={() => setCliPending(null)} disabled={cliBusy}>Deny</button>
+                    </div>
                   </div>
                 )}
-                <div className="flex mt-8">
-                  <button className="btn-sm" onClick={() => {
-                    const b = prompt('Monthly budget:', selectedSummary.monthly_budget || '')
-                    if (b !== null) setBudget(selectedProfile, b ? Number(b) : null)
-                  }}>Set Budget</button>
-                  <button className="btn-sm btn-primary" onClick={() => exportTax(selectedProfile)}>Tax Export</button>
-                  <button className="btn-sm" onClick={() => exportCSV(selectedProfile)}>CSV</button>
-                  <button className="btn-sm" onClick={() => exportPDF(selectedProfile)}>PDF</button>
-                </div>
-              </div>
-            )}
-
-            <div className="flex mb-8" style={{ gap: 6 }}>
-              <button className="btn-sm" onClick={toggleMileage}>{showMileage ? 'Hide' : 'Mileage'}</button>
-              <button className="btn-sm" onClick={toggleProjects}>{showProjects ? 'Hide' : 'Projects'}</button>
-              <button className="btn-sm" onClick={toggleTax}>{showTax ? 'Hide' : 'Tax'}</button>
-              <button className="btn-sm" onClick={toggleTrends}>{showTrends ? 'Hide' : 'Trends'}</button>
-            </div>
-
-            {showMileage && selectedProfile && (
-              <div className="status-box" style={{ marginBottom: 12 }}>
-                <div className="flex-between"><h3>Mileage</h3></div>
-                <div className="flex mb-8">
-                  <input placeholder="Start" type="number" style={{ width: 80 }} value={mileageForm.start_odometer} onChange={e => setMileageForm(f => ({...f, start_odometer: e.target.value}))} />
-                  <input placeholder="End" type="number" style={{ width: 80 }} value={mileageForm.end_odometer} onChange={e => setMileageForm(f => ({...f, end_odometer: e.target.value}))} />
-                  <input placeholder="Purpose" style={{ flex: 1 }} value={mileageForm.purpose} onChange={e => setMileageForm(f => ({...f, purpose: e.target.value}))} />
-                  <button className="btn-sm" onClick={addMileage}>Log</button>
-                </div>
-                {mileageLogs.slice(0, 5).map(m => (
-                  <div key={m.id} className="flex-between muted" style={{ marginBottom: 4 }}>
-                    <span>{m.date} {m.miles ? `${m.miles}mi` : ''} {m.purpose ? `— ${m.purpose}` : ''}</span>
-                    <button className="btn-sm btn-danger" onClick={() => deleteMileage(m.id)}>X</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {showProjects && selectedProfile && (
-              <div className="status-box" style={{ marginBottom: 12 }}>
-                <div className="flex-between"><h3>Projects</h3></div>
-                <div className="flex mb-8">
-                  <input placeholder="Project name" value={newProjectName} onChange={e => setNewProjectName(e.target.value)} style={{ flex: 1 }} />
-                  <button className="btn-sm" onClick={addProject}>Add</button>
-                </div>
-                {projects.map(p => (
-                  <div key={p.id} className="flex-between muted" style={{ marginBottom: 4 }}>
-                    <span>{p.name}</span>
-                    <button className="btn-sm btn-danger" onClick={() => deleteProject(p.id)}>X</button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {showTax && taxData && (
-              <div className="status-box" style={{ marginBottom: 12 }}>
-                <div className="flex-between"><h3>Business Tax Summary</h3></div>
-                {taxData.deductions?.map(d => (
-                  <div key={d.tax_category} className="flex-between" style={{ marginBottom: 4 }}>
-                    <span>{d.tax_category}</span>
-                    <span>{money(d.total_deduction)} ({d.count})</span>
-                  </div>
-                ))}
-                <div className="mt-8 flex-between">
-                  <strong>Total Deductions</strong>
-                  <strong>{money(taxData.grand_total)}</strong>
-                </div>
-              </div>
-            )}
-
-            {showTrends && (
-              <div className="status-box" style={{ marginBottom: 12 }}>
-                <div className="flex-between"><h3>Spending Trends</h3></div>
-                {Object.entries(trendsByMonth).slice(0, 6).map(([month, entries]) => (
-                  <div key={month} style={{ marginBottom: 8 }}>
-                    <div className="muted" style={{ marginBottom: 4 }}>{month}</div>
-                    {entries.slice(0, 4).map((e, i) => (
-                      <div key={i} className="flex-between" style={{ fontSize: 12, marginBottom: 2 }}>
-                        <span>{e.category}</span>
-                        <span>{money(e.total_spent)}</span>
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {showDashboard && (
-              <div>
-                <h4>Profiles</h4>
-                <div className="profile-list">
-                  {profileSummaries.map(p => (
-                    <button key={p.id} className={selectedProfile === p.id ? 'active' : ''} onClick={() => selectProfile(p.id)}>
-                      <div className="flex-between">
-                        <strong>{p.name}</strong>
-                        <div className="flex" style={{ gap: 4, alignItems: 'center' }}>
-                          {p.budget_used_pct !== null && (
-                            <span className={`tag ${p.budget_used_pct >= 90 ? 'tag-green' : ''}`}>
-                              {p.budget_used_pct}%
-                            </span>
-                          )}
-                          <span className="btn-sm btn-danger" style={{ cursor: 'pointer', fontSize: 10, padding: '2px 6px' }}
-                                onClick={e => { e.stopPropagation(); deleteProfile(p.id) }}>
-                            Del
-                          </span>
-                        </div>
-                      </div>
-                      <span className="muted">{p.receipt_count || 0} receipts • {money(p.total_spent || 0)}</span>
-                    </button>
-                  ))}
-                </div>
-
-                <h4 style={{ marginTop: 16 }}>Receipts for Selected Profile</h4>
-                <div style={{ marginBottom: 10 }}>
+                <div className="cli-foot">
+                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#8b949e', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={cliApprove} onChange={e => setCliApprove(e.target.checked)} style={{ accentColor: 'var(--success)' }} />
+                    approve write/edit/run
+                  </label>
                   <input
-                    placeholder="Search the ledger..."
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder="jarv_run ls -la   (or just ask JARV something)"
+                    value={cliInput}
+                    onChange={e => setCliInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && runCli()}
+                    disabled={cliBusy}
                   />
+                  <button className="btn-primary" onClick={runCli} disabled={cliBusy || !cliInput.trim()}>Run</button>
                 </div>
-                <div>
-                  {dashboardReceipts.length === 0 ? (
-                    <div className="empty-state">
-                      <svg viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.2">
-                        <path d="M6 2h9l4 4v16H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z" strokeLinejoin="round"/>
-                        <path d="M14 2v4h4M9 11h6M9 15h4" strokeLinecap="round"/>
-                      </svg>
-                      <div className="es-title">Family ledger, empty for now</div>
-                      <div className="es-sub">Snap a receipt or log a supply entry — the vault files it instantly.</div>
-                    </div>
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                Write/edit/run need the approve box ON (operator-approval policy gates those three tools inside the sandbox).
+              </div>
+            </>
+          )}
+
+          {forgeTab === 'ide' && (
+            <div className="ide-split">
+              <div className="ide-tree">
+                <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', padding: '4px 8px', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>jarv-sandbox</span>
+                  <button className="btn-sm" onClick={loadTree} disabled={treeLoading}>{treeLoading ? '…' : '↻'}</button>
+                </div>
+                {(tree || []).map((e, i) => (
+                  <div
+                    key={i}
+                    className={`file ${e.type === 'dir' ? 'dir' : ''} ${e.name === currentFile ? 'active' : ''}`}
+                    onClick={() => e.type !== 'dir' && openFile(e.name)}
+                  >
+                    {e.type === 'dir' ? '📁' : '📄'} {e.name}
+                  </div>
+                ))}
+                {treeLoading && <div className="muted" style={{ fontSize: 11, padding: '8px' }}>loading…</div>}
+                {!treeLoading && tree.length === 0 && <div className="muted" style={{ fontSize: 11, padding: '8px' }}>empty workspace</div>}
+              </div>
+              <div>
+                <div className="ide-editor">
+                  {currentFile && fileMeta && fileMeta.binary ? (
+                    <>
+                      <div className="binary-note">
+                        <strong>Binary file — not text.</strong>
+                        <p>{fileMeta.note || 'This file is not a readable text file; the garbled "replacement characters" are just how binary bytes render.'}</p>
+                        {fileMeta.kind ? <p><em>Detected: {fileMeta.kind}</em></p> : null}
+                        {fileMeta.excerpt ? <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>Readable strings inside: <code>{fileMeta.excerpt}</code></p> : null}
+                        <p className="muted" style={{ fontSize: 12, marginTop: 6 }}>{fileMeta.size?.toLocaleString?.() ?? fileMeta.size} bytes. Use the JARV Data Decode tool to study it.</p>
+                      </div>
+                      <div className="ide-editor-bar">
+                        <span className="path">{currentFile}</span>
+                        <button className="btn-sm" onClick={() => setFileMeta(null)}>Show raw view</button>
+                      </div>
+                    </>
+                  ) : currentFile ? (
+                    <>
+                      <textarea spellCheck={false} value={editor} onChange={e => setEditor(e.target.value)} />
+                      <div className="ide-editor-bar">
+                        <span className="path">{currentFile}</span>
+                        <button className="btn-sm" onClick={runEditor}>Run</button>
+                        <button className="btn-primary" onClick={saveFile} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+                      </div>
+                    </>
                   ) : (
-                  dashboardReceipts.filter(r => {
-                    const q = searchQuery.toLowerCase()
-                    if (!q) return true
-                    return [r.vendor, r.category, r.project_name, r.date].some(f => f && String(f).toLowerCase().includes(q))
-                  }).map(r => {
-                    const dmeta = deductibleMeta(r)
-                    return (
-                    <div key={r.id} className="receipt-item" style={{ cursor: 'pointer' }} onClick={() => setViewReceiptImage(r)}>
-                      <div className="flex-between">
-                        <div style={{ fontWeight: 700 }}>{r.vendor}</div>
-                        <div className="flex" style={{ gap: 4 }}>
-                          <span className={`tag ${dmeta.cls}`} title={dmeta.hint}>{dmeta.label}</span>
-                          {r.category && <span className="tag">{r.category}</span>}
-                          {r.project_name && <span className="tag">{r.project_name}</span>}
-                        </div>
-                      </div>
-                      <div className="flex-between muted">
-                        <span>{r.date} • {money(r.total)}</span>
-                        <div className="flex" style={{ gap: 4 }} onClick={e => e.stopPropagation()}>
-                          <button className="btn-sm" onClick={() => openEditReceipt(r)}>Edit</button>
-                          <button className="btn-sm btn-danger" onClick={() => deleteReceipt(r.id)}>Del</button>
-                        </div>
-                      </div>
-                    </div>
-                    )
-                  })
+                    <textarea readOnly placeholder="// select a file from the tree to open the editor" style={{ color: '#8b949e' }} />
                   )}
                 </div>
+                {runLog && <div className="ide-run">{runLog}</div>}
               </div>
-            )}
-          </div>
-        </div>
-
-        <div className="panel-card" style={{ marginBottom: 16 }}>
-          <div className="flex-between" style={{ marginBottom: 4 }}>
-            <h2 style={{ margin: 0, fontSize: 15 }}>OSINT — Satellite Comms Intelligence</h2>
-            <button onClick={() => setOsintShow(s => { if (!s) loadOsintPolicy(); return !s })}>{osintShow ? 'Hide' : 'Open'}</button>
-          </div>
-          {osintShow && (
-            <div>
-              <div className="muted" style={{ marginBottom: 10 }}>
-                Live satcom vision via OrbitDeck (JARV cross-trained). Query overhead satellites, passes and coverage footprints.
-              </div>
-              {osintPolicy && osintPolicy.safety && (
-                <div className="status-box" style={{ marginBottom: 10, fontSize: 12 }}>
-                  <div style={{ fontWeight: 700, marginBottom: 4 }}>Guardrails (autonomous JARV calls)</div>
-                  <div className="muted">Always on: {(osintPolicy.safety.safeTools || []).join(', ')}</div>
-                  <div className="muted">Require operator approval: {(osintPolicy.safety.confirmTools || []).join(', ')} {osintPolicy.safety.autonomousShell ? '(shell ON)' : ''} {osintPolicy.safety.autonomousNet ? '(network ON)' : ''}</div>
-                </div>
-              )}
-              <div className="flex mb-8" style={{ gap: 6 }}>
-                <button className="btn-sm" onClick={loadOsintHandbook}>{osintHandbook ? 'Handbook loaded' : 'Load Handbook'}</button>
-                <button className="btn-sm" onClick={useFamilyGrid} title="Pull the hub's current fix from /api/location into the scan">Use family grid</button>
-              </div>
-              {osintHandbook && (
-                <div className="status-box" style={{ marginBottom: 10, maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
-                  {osintHandbook}
-                </div>
-              )}
-              <div className="flex" style={{ gap: 8, marginBottom: 8 }}>
-                <input placeholder="Latitude" type="number" step="any" value={osintLat} onChange={e => setOsintLat(e.target.value)} style={{ width: 110 }} />
-                <input placeholder="Longitude" type="number" step="any" value={osintLon} onChange={e => setOsintLon(e.target.value)} style={{ width: 110 }} />
-                <input placeholder="Groups" value={osintSatGroups} onChange={e => setOsintSatGroups(e.target.value)} style={{ flex: 1 }} title="starlink, oneweb, iridium-next, gps, galileo, glonass, beidou, geo" />
-                <button onClick={runOsintSatvision} disabled={osintLoading}>{osintLoading ? 'Scanning…' : 'Scan Sky'}</button>
-              </div>
-              {osintError && <div className="status-box" style={{ marginBottom: 8, color: '#b42318', background: '#fef3f2' }}>{osintError}</div>}
-              {osintData && (() => {
-                const vis = (() => { try { return JSON.parse(osintData.stdout) } catch (e) { return null } })()
-                if (!vis) return <div className="muted">No usable satellite data returned.</div>
-                const overhead = vis.overhead || []
-                return (
-                  <div>
-                    <div className="flex" style={{ gap: 8, marginBottom: 8 }}>
-                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Tracked</div><div className="stat-value">{vis.satellites_tracked}</div></div>
-                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Overhead now</div><div className="stat-value">{overhead.length}</div></div>
-                      <div className="stat-card" style={{ flex: 1 }}><div className="stat-label">Observer</div><div className="stat-value" style={{ fontSize: 12 }}>{vis.observer.lat}°, {vis.observer.lon}°</div></div>
-                    </div>
-                    {overhead.length > 0 ? (
-                      <div className="status-box">
-                        <div style={{ fontWeight: 700, marginBottom: 6 }}>Satellites above the horizon</div>
-                        {overhead.slice(0, 12).map((s, i) => (
-                          <div key={i} className="flex-between" style={{ marginBottom: 2, fontSize: 12 }}>
-                            <span>{s.satellite} <span className="muted">({s.norad})</span></span>
-                            <span className="muted">el {s.elevation_deg}° • az {s.azimuth_deg}° • {s.range_km} km</span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="muted">No satellites above the horizon right now.</div>
-                    )}
-                  </div>
-                )
-              })()}
             </div>
           )}
+
+          {forgeTab === 'vibe' && (
+            <>
+              <div className="vibe-box">
+                <textarea
+                  className="vibe-prompt"
+                  placeholder="Describe what to build in plain language — JARV writes it into the workspace for you. e.g. 'Build a todo CLI that saves to a JSON file and lets me add/list/done items' — Enter to send, Shift+Enter for a new line."
+                  value={vibeInput}
+                  onChange={e => setVibeInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); runVibe() } }}
+                  disabled={vibeBusy}
+                />
+                <div className="flex-between">
+                  <div className="vibe-suggests">
+                    {['Build a markdown daily-log CLI', 'Write a Python script that fetches today\'s satellite passes', 'Make a node script that sums a CSV file', 'Create an HTML dashboard from a JSON data file'].map(s => (
+                      <button key={s} className="chip" onClick={() => setVibeInput(s)}>{s}</button>
+                    ))}
+                  </div>
+                  <button className="btn-primary" onClick={runVibe} disabled={vibeBusy || !vibeInput.trim()}>{vibeBusy ? 'Shaping…' : 'Vibe'}</button>
+                </div>
+                {vibePending && (
+                  <div className="approval-bar" style={{ marginTop: 10 }}>
+                    <div className="flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>JARV needs approval to run {vibePending.needsApproval.map(t => t.name.replace('jarv_', '')).join(', ')}</span>
+                      <span className="muted" style={{ fontSize: 11 }}>write/edit mutate files in the workspace; run executes shell.</span>
+                    </div>
+                    <div className="flex" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                      <button className="btn-sm" onClick={() => runVibe('once')} disabled={vibeBusy}>Allow once</button>
+                      <button className="btn-sm" onClick={() => runVibe('session')} disabled={vibeBusy}>Allow this session</button>
+                      <button className="btn-sm" onClick={() => runVibe('all')} disabled={vibeBusy}>Allow all</button>
+                      <button className="btn-sm" onClick={() => setVibePending(null)} disabled={vibeBusy}>Deny</button>
+                    </div>
+                  </div>
+                )}
+                {vibeLines.length > 0 && (
+                  <div className="vibe-log">
+                    <div className="vibe-body">
+                      {vibeLines.map((l, i) => <div key={i} className={`vibe-line ${l.kind}`}>{l.text}</div>)}
+                      {vibeBusy && <div className="vibe-line out" style={{ color: '#8b949e' }}>…</div>}
+                      <div ref={vibeEndRef} />
+                    </div>
+                  </div>
+                )}
+                <div className="muted" style={{ fontSize: 11 }}>
+                  Vibe code works in the JARV workspace ({workspace ? workspace.sandboxRoot : 'backend/jarv-sandbox'}). Write/edit/run ask for your approval the first time — pick Allow once, this session, or all.
+                  Adding any <button className="chip" style={{ padding: '1px 6px' }} onClick={() => setForgeTab('keys')}>Provider Key</button> makes vibe-coding stronger (a bigger brain plans better).
+                </div>
+              </div>
+            </>
+          )}
+
+          {forgeTab === 'keys' && (
+            <>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>
+                Every key below is one more link in JARV's failover chain. Add it to <code>{KEYS_DEST}</code>, then restart the backend. No key is required
+                — local Ollama (qwen2.5:1.5b) + Pollinations run as always-on fallbacks.
+              </div>
+              <div className="keys-grid">
+                {PROVIDER_KEYS.map(k => (
+                  <div key={k.env} className="key-card">
+                    <div className="k-name">{k.name}</div>
+                    <div className="k-env">{k.env}=</div>
+                    <div className="k-note">{k.note}</div>
+                    <a className="k-link" href={k.url} target="_blank" rel="noreferrer">get key ↗</a>
+                  </div>
+                ))}
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+                Override order with <code>GENIE_AI_PROVIDERS=gemini,groq,openrouter</code> in {KEYS_DEST}. Full docs: <code>backend/.env.example</code>.
+              </div>
+            </>
+          )}
         </div>
+        </>)}
+
+        {view === 'gods-eye' && (<>
+        <div className="stats-grid">
+          <div className="stat-card">
+            <div className="stat-label">Sats Online</div>
+            <div className="stat-value">{(globePositions.length || 0).toLocaleString()}</div>
+            <div className="muted">projected across the wire</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Constellations</div>
+            <div className="stat-value">{globeConstellations}</div>
+            <div className="muted">groups reporting</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Grid Fix</div>
+            <div className="stat-value" style={{ fontSize: 16 }}>{hubLocation ? `${hubLocation.lat.toFixed(1)}°, ${hubLocation.lon.toFixed(1)}°` : '—'}</div>
+            <div className="muted">{hubLocSource}</div>
+          </div>
+          <div className="stat-card">
+            <div className="stat-label">Genie Link</div>
+            <div className="stat-value" style={{ fontSize: 18 }}>{linkMeta(comms).label.replace('Genie Link ', '').split(' · ')[0]}</div>
+            <div className="muted">tunnel to JARV-Genie</div>
+          </div>
+        </div>
+
+        <div className="panel-card" style={{ marginBottom: 16, padding: 0, overflow: 'hidden' }}>
+          <div className="flex-between" style={{ padding: '14px 16px 0' }}>
+            <h2 style={{ margin: 0, fontSize: 15 }}>God's Eye View — Live Global Satellite Intelligence</h2>
+            <button className="btn-sm" onClick={loadGlobe} disabled={globeLoading}>{globeLoading ? 'Projecting…' : 'Refresh Grid'}</button>
+          </div>
+          <div className="muted" style={{ fontSize: 12, padding: '4px 16px 8px' }}>
+            Photorealistic 3D globe — live satellites from CelesTrak (OrbitDeck), color-coded by constellation.
+          </div>
+          <GodsEyeView positions={globePositions} hubLocation={hubLocation} theme={theme} />
+          {globeError && <div className="status-box" style={{ margin: 10, fontSize: 12 }}>Globe: {globeError}</div>}
+        </div>
+        </>)}
       </div>
-
-      {editReceipt && (
-        <div className="modal-overlay" onClick={() => setEditReceipt(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h3>Edit Receipt</h3>
-            <div style={{ marginBottom: 10 }}>
-              <label>Vendor</label>
-              <input value={editForm.vendor} onChange={e => setEditForm(f => ({...f, vendor: e.target.value}))} />
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label>Category</label>
-              <select value={editForm.category} onChange={e => setEditForm(f => ({...f, category: e.target.value}))}>
-                <option value="">Uncategorized</option>
-                {categories.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label>Tax Category</label>
-              <select value={editForm.tax_category} onChange={e => setEditForm(f => ({...f, tax_category: e.target.value}))}>
-                <option value="">None</option>
-                <option value="Travel">Travel</option>
-                <option value="Meals">Meals</option>
-                <option value="Supplies">Supplies</option>
-                <option value="Equipment">Equipment</option>
-                <option value="Utilities">Utilities</option>
-                <option value="Vehicle">Vehicle</option>
-                <option value="Advertising">Advertising</option>
-                <option value="Software">Software</option>
-              </select>
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label>Type</label>
-              <select value={editForm.is_business ? 'business' : 'personal'} onChange={e => setEditForm(f => ({...f, is_business: e.target.value === 'business'}))}>
-                <option value="business">Business</option>
-                <option value="personal">Personal</option>
-              </select>
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label>Project</label>
-              <select value={editForm.project_name} onChange={e => setEditForm(f => ({...f, project_name: e.target.value}))}>
-                <option value="">None</option>
-                {projects.map(p => <option key={p.id} value={p.name}>{p.name}</option>)}
-              </select>
-            </div>
-            <div style={{ marginBottom: 10 }}>
-              <label>Business Notes</label>
-              <textarea value={editForm.business_notes} onChange={e => setEditForm(f => ({...f, business_notes: e.target.value}))} />
-            </div>
-            <div className="flex">
-              <button onClick={saveEditReceipt}>Save</button>
-              <button className="btn-warn" onClick={() => setEditReceipt(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {viewReceiptImage && (
-        <div className="modal-overlay" onClick={() => setViewReceiptImage(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <div className="flex-between" style={{ marginBottom: 12 }}>
-              <h3>{viewReceiptImage.vendor}</h3>
-              <button className="btn-sm" onClick={() => setViewReceiptImage(null)}>Close</button>
-            </div>
-            <div className="muted" style={{ marginBottom: 12 }}>
-              {viewReceiptImage.date} • {money(viewReceiptImage.total)}
-            </div>
-            <img
-              src={`${API_BASE}/api/receipts/${viewReceiptImage.id}/image`}
-              alt="Receipt"
-              style={{ width: '100%', maxHeight: '60vh', objectFit: 'contain', borderRadius: 8, background: '#fff' }}
-              onError={e => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'block') }}
-            />
-            <div className="muted" style={{ display: 'none', textAlign: 'center', padding: 20 }}>Receipt image not available.</div>
-          </div>
-        </div>
-      )}
 
       {toast && <div className="toast">{toast}</div>}
       </>

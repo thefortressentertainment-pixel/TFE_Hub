@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>engine probe</title>
+    <style>
+      body { margin: 0; background: #0b1017; }
+      #out { position: fixed; bottom: 0; left: 0; right: 0; background: #0f1621; color: #9fe0a0; font: 11px/1.5 Menlo, monospace; padding: 8px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <div id="probe" style="width:400px;height:300px"></div>
+    <div id="out">running…</div>
+    <script type="module">
+      import { Engine, Scene, Color3, MeshBuilder, StandardMaterial, ArcRotateCamera, HemisphericLight, Vector3, EngineFactory } from '@babylonjs/core'
+      const out = document.getElementById('out')
+      const log = (m) => { out.textContent += m + '\n'; console.log(m) }
+
+      const audit = (cv, tag) => {
+        try {
+          const img = new Image()
+          img.onload = () => {
+            const sc = document.createElement('canvas'); sc.width = img.width; sc.height = img.height
+            const ctx = sc.getContext('2d'); ctx.drawImage(img, 0, 0)
+            const px = ctx.getImageData(0, 0, sc.width, sc.height).data
+            let lit = 0, sum = 0; const n = px.length / 4
+            for (let p = 0; p < px.length; p += 4) { const l = 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2]; sum += l; if (l > 15) lit++ }
+            log('PIX[' + tag + '] ' + img.width + 'x' + img.height + ' lit=' + (100 * lit / n).toFixed(2) + '% avg=' + (sum / n).toFixed(1))
+          }
+          img.src = cv.toDataURL('image/png')
+        } catch (e) { log('audit err ' + tag + ': ' + e.message) }
+      }
+
+      const variants = [
+        { label: 'stencil+preserve', opts: { stencil: true, preserveDrawingBuffer: true } },
+        { label: 'plain', opts: null },
+      ]
+      async function run() {
+        for (const v of variants) {
+          try {
+            const canvas = document.createElement('canvas')
+            const wrap = document.createElement('div')
+            wrap.style.cssText = 'width:400px;height:300px;display:inline-block'
+            document.getElementById('probe').appendChild(wrap); wrap.appendChild(canvas)
+            let engine
+            try { engine = new Engine(canvas, true, v.opts) } catch (e) { log('FAIL ' + v.label + ' ' + e.message); continue }
+            const scene = new Scene(engine)
+            scene.clearColor = new Color3(0.02, 0.03, 0.05)
+            const cam = new ArcRotateCamera('c', 0, 1, 10, Vector3.Zero(), scene)
+            cam.attachControl(canvas, false)
+            new HemisphericLight('h', new Vector3(0, 1, 0), scene)
+            const sph = MeshBuilder.CreateSphere('s', { diameter: 2 }, scene)
+            sph.material = new StandardMaterial('m', scene)
+            sph.material.emissiveColor = new Color3(1, 0.2, 0.2)
+            engine.runRenderLoop(() => scene.render())
+            log('OK  ' + v.label + ' canvas ' + canvas.width + 'x' + canvas.height)
+            setTimeout(() => { audit(canvas, v.label); engine.stopRenderLoop(); scene.dispose(); engine.dispose(); wrap.remove() }, 2000)
+          } catch (e) { log('FAIL ' + v.label + '  ' + (e && (e.message || e.name) || e)) }
+        }
+        log('DONE-TRIGGERING')
+      }
+      run()
+    </script>
+  </body>
+</html>

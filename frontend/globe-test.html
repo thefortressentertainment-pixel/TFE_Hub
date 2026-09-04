@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>globe test</title>
+    <style>
+      body { margin: 0; background: #0b1017; color: #e7ecf5; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+      .sanctuary-globe { position: relative; width: 720px; height: 400px; min-height: 320px; }
+      .globe-canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+      .globe-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+      .globe-legend { position: absolute; top: 10px; left: 12px; display: flex; flex-wrap: wrap; gap: 8px 12px; }
+      .legend-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; background: #141b26; border: 1px solid #263140; border-radius: 20px; padding: 3px 9px; }
+      .globe-count { position: absolute; bottom: 10px; left: 12px; font-size: 11px; color: #8794a8; }
+      .debugbar { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: #0f1621; border-bottom: 1px solid #263140; padding: 6px 10px; font: 11px/1.6 Menlo, monospace; white-space: pre-wrap; max-height: 200px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <div class="debugbar" id="debug">initializing…</div>
+    <div id="root" />
+    <script type="module">
+      import React, { useRef } from 'react'
+      import { createRoot } from 'react-dom/client'
+      import SanctuaryGlobe from './src/components/SanctuaryGlobe.jsx'
+
+      const dbg = document.getElementById('debug')
+      const logs = []
+      const log = (m) => { logs.push(String(m)); dbg.textContent = logs.join('\n') }
+      window.__globeLog = log
+      window.__GLOBE_DIAG = true
+      ;['error', 'warn'].forEach(k => { const o = console[k].bind(console); console[k] = (...a) => { log(k + ': ' + a.map(String).join(' ')); o(...a) } })
+      window.onerror = (m, src, line, col, err) => log('window.onerror: ' + m + ' @' + line + ':' + col + (err && err.stack ? '\n' + err.stack.split('\n').slice(0,6).join('\n') : ''))
+
+      try {
+        const c = document.createElement('canvas')
+        const gl = c.getContext('webgl2') || c.getContext('webgl')
+        log('webgl: ' + (gl ? (typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext ? 'webgl2' : 'webgl1') : 'UNAVAILABLE'))
+      } catch (e) { log('webgl check: ' + e.message) }
+
+      const positions = []
+      let i = 0
+      for (let n = 0; n < 15; n++) {
+        const lat = (n - 7) * 10
+        for (let lon = -180; lon < 180; lon += 10) positions.push({ satellite: 'STARLINK-' + (++i), norad: 40000 + i, group: 'starlink', lat, lon, alt_km: 550 })
+      }
+      for (let n = 0; n < 5; n++) positions.push({ satellite: 'GPS BIIR-' + n, norad: 20000 + n, group: 'gps', lat: (Math.random() - 0.5) * 40, lon: Math.random() * 360 - 180, alt_km: 20200 })
+      positions.push({ satellite: 'ISS (ZARYA)', norad: 25544, group: 'iss', lat: 12.3, lon: -34.5, alt_km: 420 })
+
+      class Boundary extends React.Component {
+        constructor(p) { super(p); this.state = { err: null } }
+        static getDerivedStateFromError(e) { return { err: e } }
+        componentDidCatch(e, info) { log('BOUNDARY: ' + (e && e.stack || e) + '\n' + (info && info.componentStack || '')) }
+        render() { return this.state.err ? React.createElement('pre', { style: { color: '#ff9c9c' } }, 'RENDER FAIL: ' + this.state.err.message + '\n' + this.state.err.stack) : this.props.children }
+      }
+      try {
+        createRoot(document.getElementById('root')).render(
+          React.createElement(Boundary, null,
+            React.createElement(SanctuaryGlobe, { positions, hubLocation: { lat: 37.7749, lon: -122.4194 } })
+          )
+        )
+        log('mount-called')
+      } catch (e) { log('MOUNT THROW: ' + (e && (e.message + '\n' + e.stack))) }
+      window.addEventListener('unhandledrejection', (e) => log('UNHANDLED: ' + ((e.reason && (e.reason.message + '\n' + e.reason.stack)) || e.reason)))
+
+      // Pixel audit: read the live WebGL buffer back via toDataURL (needs
+      // preserveDrawingBuffer, which the component sets) and report lit-pixel %.
+      // This works under headless virtual time where compositor screenshots lie.
+      const audit = () => {
+        const canvases = [...document.querySelectorAll('canvas')]
+        for (const cv of canvases) {
+          try {
+            const url = cv.toDataURL('image/png')
+            if (!url || url === 'data:,') return
+            const img = new Image()
+            img.onload = () => {
+              const sc = document.createElement('canvas')
+              sc.width = img.width; sc.height = img.height
+              const ctx = sc.getContext('2d')
+              if (!ctx) return
+              ctx.drawImage(img, 0, 0)
+              const px = ctx.getImageData(0, 0, sc.width, sc.height).data
+                      let lit = 0, sum = 0
+              const n = px.length / 4
+              for (let p = 0; p < px.length; p += 4) {
+                const l = 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2]
+                sum += l
+                if (l > 24) lit++
+              }
+              if ((window.__auditN = (window.__auditN || 0) + 1) >= 3) clearInterval(window.__auditIv)
+              const msg = 'pix[' + cv.className + '] ' + img.width + 'x' + img.height +
+                ' lit=' + (100 * lit / n).toFixed(2) + '% avg=' + (sum / n).toFixed(1)
+              window.__globePix = msg
+              log(msg)
+            }
+            img.src = url
+          } catch (e) { log('audit err: ' + e.message) }
+        }
+      }
+      window.__auditIv = setInterval(audit, 500)
+      setTimeout(() => log('virtual-done'), 8000)
+    </script>
+  </body>
+</html>

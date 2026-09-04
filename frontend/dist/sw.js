@@ -1,4 +1,4 @@
-const CACHE = 'receiptvault-v2';
+const CACHE = 'receiptvault-v3';
 
 self.addEventListener('install', () => {
   self.skipWaiting();

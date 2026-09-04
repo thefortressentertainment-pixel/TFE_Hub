@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8" /><title>scene replica (no React)</title>
+    <style>body{margin:0;background:#0b1017}#box{position:relative;width:720px;height:400px}#box canvas{width:100%;height:100%;display:block}#out{position:fixed;bottom:0;left:0;right:0;background:#0f1621;color:#9fe0a0;font:11px/1.5 Menlo;padding:8px;max-height:200px;overflow:auto;white-space:pre-wrap}</style>
+  </head>
+  <body>
+    <div id="box"></div>
+    <div id="out">running…</div>
+    <script type="module">
+      import { Engine, Scene, ArcRotateCamera, HemisphericLight, Color3, Vector3, TransformNode,
+        MeshBuilder, StandardMaterial } from '@babylonjs/core'
+      const out = document.getElementById('out')
+      const log = (m) => { out.textContent += m + '\n' }
+      const canvas = document.createElement('canvas')
+      document.getElementById('box').appendChild(canvas)
+
+      const R = 9
+      const latLonToVec = (lat, lon, r) => {
+        const la = (lat * Math.PI) / 180, lo = (lon * Math.PI) / 180
+        return new Vector3(Math.cos(la) * Math.cos(lo), Math.sin(la), Math.cos(la) * Math.sin(lo)).scaleInPlace(r)
+      }
+      const decimate = (list, cap) => {
+        if (list.length <= cap) return list
+        const step = Math.ceil(list.length / cap)
+        return list.filter((_, i) => i % step === 0)
+      }
+
+      const positions = []
+      let i = 0
+      for (let n = 0; n < 15; n++) {
+        const lat = (n - 7) * 10
+        for (let lon = -180; lon < 180; lon += 10) positions.push({ satellite: 'S-' + (++i), norad: 40000 + i, group: 'starlink', lat, lon, alt_km: 550 })
+      }
+
+      try {
+        const engine = new Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true })
+        const scene = new Scene(engine)
+        const camera = new ArcRotateCamera('cam', -Math.PI / 3, Math.PI / 2.4, 22, Vector3.Zero(), scene)
+        camera.lowerRadiusLimit = 9; camera.upperRadiusLimit = 40
+        camera.attachControl(canvas, true)
+        const hemi = new HemisphericLight('hemi', new Vector3(0.4, 1, -0.3), scene); hemi.intensity = 0.6
+        const back = new HemisphericLight('back', new Vector3(-0.5, -0.2, -0.8), scene); back.intensity = 0.35
+        scene.clearColor = Color3.FromHexString('#05070d')
+
+        const globeGroup = new TransformNode('globeGroup', scene)
+        const globe = MeshBuilder.CreateSphere('globe', { diameter: R * 2, segments: 48 }, scene)
+        const gmat = new StandardMaterial('globeMat', scene)
+        gmat.diffuseColor = Color3.FromHexString('#244d73')
+        gmat.emissiveColor = Color3.FromHexString('#16324e')
+        gmat.specularColor = Color3.FromHexString('#2c3e50'); gmat.specularPower = 32
+        globe.material = gmat; globe.parent = globeGroup
+
+        const atmo = MeshBuilder.CreateSphere('atmo', { diameter: R * 2.18, segments: 48 }, scene)
+        const amat = new StandardMaterial('atmoMat', scene)
+        amat.emissiveColor = Color3.FromHexString('#3d7bd6'); amat.alpha = 0.12
+        amat.backFaceCulling = false; amat.disableLighting = true; amat.freeze()
+        atmo.material = amat; atmo.parent = globeGroup
+
+        const pts = []
+        for (let lat = -80; lat <= 80; lat += 20) { const ring = []; for (let lon = -180; lon <= 180; lon += 3) ring.push(latLonToVec(lat, ((lon + 180) % 360) - 180, R * 1.004)); pts.push(ring) }
+        for (let lon = -180; lon < 180; lon += 20) { const ring = []; for (let lat = -90; lat <= 90; lat += 3) ring.push(latLonToVec(lat, lon, R * 1.004)); pts.push(ring) }
+        const lineGroups = MeshBuilder.CreateLineSystem('latlon', { lines: pts }, scene)
+        const lgMat = new StandardMaterial('gridMat', scene)
+        lgMat.emissiveColor = Color3.FromHexString('#2c6aa8'); lgMat.disableLighting = true
+        lineGroups.material = lgMat; lineGroups.parent = globeGroup
+
+        const eqPts = []
+        for (let lon = -180; lon <= 180; lon += 1) eqPts.push(latLonToVec(0, lon, R * 1.012))
+        const eq = MeshBuilder.CreateLines('equator', { points: eqPts }, scene)
+        const eqMat = new StandardMaterial('eqMat', scene)
+        eqMat.emissiveColor = Color3.FromHexString('#54c8ff'); eqMat.disableLighting = true
+        eq.material = eqMat; eq.parent = globeGroup
+
+        const satSpheres = new Map()
+        const byGroup = {}
+        for (const p of positions) { (byGroup[p.group] = byGroup[p.group] || []).push(p) }
+        for (const [g, list] of Object.entries(byGroup)) {
+          const mesh = MeshBuilder.CreateSphere('sats-' + g, { diameter: 0.14, segments: 8 }, scene)
+          const mat = new StandardMaterial('satMat-' + g, scene)
+          mat.emissiveColor = Color3.FromHexString('#ffd54f'); mat.diffuseColor = Color3.Black(); mat.specularColor = Color3.Black()
+          mesh.material = mat; mesh.parent = globeGroup; mesh.isPickable = true
+          for (const p of decimate(list, 700)) {
+            const r = R + 0.3 + Math.max(0, p.alt_km || 550) / 35786 * (R * 0.5)
+            const inst = mesh.createInstance('i-' + p.norad + '-' + g)
+            inst.position.copyFrom(latLonToVec(p.lat, p.lon, r))
+          }
+          satSpheres.set(g, mesh)
+        }
+
+        engine.runRenderLoop(() => scene.render())
+        log('scene built: ' + scene.meshes.length + ' meshes, engine ' + engine.version)
+        scene.onBeforeRenderObservable.add(() => { globeGroup.rotation.y += 0.001 })
+        let n = 0
+        const audit = () => {
+          if (++n > 3) { clearInterval(t); return }
+          const img = new Image()
+          img.onload = () => {
+            const sc = document.createElement('canvas'); sc.width = img.width; sc.height = img.height
+            const ctx = sc.getContext('2d'); ctx.drawImage(img, 0, 0)
+            const px = ctx.getImageData(0, 0, sc.width, sc.height).data
+            let lit = 0; const len = px.length / 4
+            for (let p = 0; p < px.length; p += 4) { const l = 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2]; if (l > 24) lit++ }
+            log('PIX ' + img.width + 'x' + img.height + ' lit=' + (100 * lit / len).toFixed(2) + '% avg=' + ((px.reduce((a, v, idx) => a + (idx % 4 < 3 ? (0.2126 * (idx % 4 === 0 ? px[idx] : idx % 4 === 1 ? px[idx] * (0.7152 / 0.2126) : px[idx] * (0.0722 / 0.2126)) : 0), 0)) / len)) )
+          }
+          try { img.src = canvas.toDataURL('image/png') } catch (e) { log('audit err: ' + e.message) }
+        }
+        const t = setInterval(audit, 600)
+        setTimeout(() => log('DONE'), 4000)
+      } catch (e) { log('FATAL: ' + e.stack) }
+    </script>
+  </body>
+</html>

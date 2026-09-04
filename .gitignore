@@ -17,3 +17,5 @@ jarv-sandbox/tmp/
 
 __pycache__/
 *.pyc
+backend/jarv-sandbox/
+jarv-data/

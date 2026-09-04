@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset="utf-8"/><title>instance probe</title></head>
+<body><div id="box" style="width:200px;height:150px"></div><div id="out" style="font:11px monospace;white-space:pre"></div>
+<script type="module">
+import { Engine, Scene, MeshBuilder, Vector3 } from '@babylonjs/core'
+const out=document.getElementById('out');const log=t=>{out.textContent+=t+'\n'}
+const canvas=document.createElement('canvas');document.getElementById('box').appendChild(canvas)
+try{
+  const engine=new Engine(canvas,true,{preserveDrawingBuffer:true,stencil:true})
+  const scene=new Scene(engine)
+  const m=MeshBuilder.CreateSphere('src',{diameter:0.14,segments:8},scene)
+  log('mesh type: '+m.constructor.name+' hasCreateInstance='+typeof m.createInstance)
+  log('mesh.position: '+(m.position&&m.position.toString()))
+  const inst=m.createInstance('i1')
+  log('inst type: '+inst.constructor.name)
+  log('inst.position keys: '+Object.getOwnPropertyNames(inst.position||{}).join(',')+' | toString: '+(inst.position?inst.position.toString():'UNDEFINED'))
+  try{ inst.position.copyFrom(new Vector3(1,2,3)); log('copyFrom OK: '+inst.position.toString()) }catch(e){ log('copyFrom FAIL: '+e.message) }
+  try{ inst.position=new Vector3(1,2,3); log('set OK: '+inst.position.toString()) }catch(e){ log('set FAIL: '+e.message) }
+  try{ inst.setPositionWithLocalVector(new Vector3(5,6,7)); log('setPositionWithLocalVector OK') }catch(e){ log('setPositionWithLocalVector FAIL: '+e.message) }
+  try{ inst.setParent&&inst.setParent(null); }catch(e){}
+  scene.dispose();engine.dispose();log('DONE')
+}catch(e){log('FATAL: '+e.message)}
+</script></body></html>

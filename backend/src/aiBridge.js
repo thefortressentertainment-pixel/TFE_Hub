@@ -46,7 +46,7 @@ const DEFAULT_MODELS = ['deepseek-v4', 'deepseek-chat', 'deepseek-reasoner'];
 const PROVIDERS = [
   // Validated live (2026-09): these currently serve chat with the keys in .env.
   { name: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY',
-    models: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3.5-lightning:free', 'liquid/lfm-2.5-2.6b:free'] },
+    models: ['nvidia/nemotron-3.5-lightning:free', 'z-ai/glm-5.2:free', 'liquid/lfm-2.5-2.6b:free'] },
   { name: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', keyEnv: 'NVIDIA_API_KEY',
     models: ['deepseek-ai/deepseek-v4-flash-0731'] },
   { name: 'cohere', baseUrl: 'https://api.cohere.ai/compatibility/v1', keyEnv: 'COHERE_API_KEY',
@@ -233,7 +233,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
   }
 
   /** Ordered attempt list. forceLocal pins to on-machine Ollama (privacy). */
-  function makeChain(forceLocal) {
+  function makeChain(forceLocal, noLocalFallback) {
     if (forceLocal) {
       return [{ name: 'ollama-local', baseUrl: cfg.ollamaBaseUrl, apiKey: '', local: true, models: localModels() }];
     }
@@ -266,8 +266,13 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     const localEntry = { name: 'ollama-local', baseUrl: cfg.ollamaBaseUrl, apiKey: '', local: true, models: localModels() };
     const anon = PROVIDERS.filter((p) => p.anonymous)
       .map((p) => ({ name: p.name, baseUrl: p.baseUrl, apiKey: '', anonymous: true, models: p.models.slice(), path: p.path || '/chat/completions' }));
-    if (cfg.localFirst) chain.push(localEntry, ...keyed, ...anon);
-    else chain.push(...keyed, localEntry, ...anon);
+    if (cfg.localFirst) {
+      if (!noLocalFallback) chain.push(localEntry);
+      chain.push(...keyed, ...anon);
+    } else {
+      chain.push(...keyed, ...anon);
+      if (!noLocalFallback) chain.push(localEntry);
+    }
     return chain;
   }
 
@@ -305,7 +310,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
    * provider, and privacy pinning. Reports which provider actually answered.
    */
   async function meshTransport(messages, options) {
-    const chain = makeChain(!!options.forceLocal);
+    const chain = makeChain(!!options.forceLocal, !!options.noLocalFallback);
     const now = Date.now();
     const anyHealthy = chain.some((e) => {
       const h = state.providerHealth[e.name];
@@ -329,7 +334,10 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
           else if (e.status === 401 || e.status === 402 || e.status === 403) h.cooldownUntil = Date.now() + 15 * 60000;
           else if (e.status >= 500) h.cooldownUntil = Date.now() + 30000;
           const modelErr = e.status && (e.status === 400 || e.status === 404) && /model/i.test(String(e.message));
-          if (!modelErr) break; // provider-level failure → next provider
+          // 401/403 means the provider itself is unusable → next provider. 429 is
+          // per-model rate limiting on most hosts (each model has its own bucket),
+          // so keep trying the other models in this provider before moving on.
+          if (!modelErr && e.status !== 429) break;
         }
       }
     }
@@ -379,6 +387,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     let messages = normalizeMessages(args);
     if (medical || forceLocal) messages = injectSafety(messages);
     const options = Object.assign(buildOptions(args), { forceLocal });
+    options.noLocalFallback = args.local === false; // "not local" ⇒ never degrade to the local Ollama tier
     const t0 = Date.now();
     try {
       const result = await callModel(messages, options);

@@ -14,6 +14,11 @@ const aiBridge = require('../src/aiBridge');
 const telegramTunnel = require('../src/telegramTunnel');
 const jarvAgent = require('../src/jarvAgent');
 
+// The live hub answers JARV via the keyed provider mesh; mirror that here so
+// the JARV free-text check round-trips the fake DeepSeek relay, not the
+// local Ollama privacy-pin tier.
+process.env.JARV_CHAT_LOCAL = '0';
+
 let failed = 0;
 function check(name, cond, extra) {
   if (cond) { console.log(`  PASS  ${name}`); }

@@ -1369,11 +1369,18 @@ server.listen(PORT, HOST, () => {
   const tsIp = detectTailscaleIp();
   if (tsIp) console.log(`Tailscale:  http://${tsIp}:${PORT}  (tailnet-only; JARV_GENIE_URL can point here or at your ts.net name)`);
   if (telegram) console.log('Telegram tunnel: enabled (long-poll, no inbound ports)');
+  console.log(`[jarv] env: JARV_CHAT_LOCAL=${process.env.JARV_CHAT_LOCAL ?? '<unset>'} | autonomousShell=${process.env.JARV_AUTONOMOUS_SHELL ?? '<unset>'} | autonomousNet=${process.env.JARV_AUTONOMOUS_NET ?? '<unset>'} | autonomousWrite=${process.env.JARV_AUTONOMOUS_WRITE ?? '<unset>'}`);
 });
 
-process.on('SIGTERM', () => { mesh.stop(); ai.stop(); if (telegram) telegram.stop(); });
-
-process.on('SIGINT', () => { mesh.stop(); ai.stop(); if (telegram) telegram.stop(); });
+function shutdown(signal) {
+  console.log(`\n[server] ${signal} — draining mesh, AI relay and Telegram tunnel, then exiting.`);
+  try { mesh.stop(); } catch (e) { /* ignore */ }
+  try { ai.stop(); } catch (e) { /* ignore */ }
+  if (telegram) { try { telegram.stop(); } catch (e) { /* ignore */ } }
+  setTimeout(() => process.exit(0), 400).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 const JOB_AGE = parseInt(process.env.JOB_AGE || '3600', 10);
 setInterval(async () => {

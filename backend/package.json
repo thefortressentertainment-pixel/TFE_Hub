@@ -13,6 +13,7 @@
     "smoke:telegram": "node test/telegram-tunnel-smoke.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "bcryptjs": "^3.0.3",
     "bull": "^4.10.0",
     "cors": "^2.8.5",

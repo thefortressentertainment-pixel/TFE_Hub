@@ -55,6 +55,30 @@ function checkRateLimit(key) {
   return { blocked: false, attemptsRemaining: maxAttempts - entry.count };
 }
 
+// ---- Agent overload guard (text-bomb / spam defense) ----
+// Separate from the login limiter: bounds how aggressively any one actor can
+// drive JARV, so a hostile blast of messages can't pin the relay in a loop.
+const AGENT_MAX_PER_MIN = 40;
+const AGENT_MAX_CONCURRENT = 3;
+const agentHits = new Map();   // key -> { count, windowStart }
+const agentInflight = new Map(); // key -> count
+function checkAgentRate(key) {
+  const now = Date.now();
+  const e = agentHits.get(key) || { count: 0, windowStart: now };
+  if (now - e.windowStart > 60000) { e.count = 0; e.windowStart = now; }
+  e.count++;
+  agentHits.set(key, e);
+  const inflight = agentInflight.get(key) || 0;
+  if (inflight >= AGENT_MAX_CONCURRENT) return { retryAfter: 3, reason: 'JARV is busy — too many of your requests in flight at once' };
+  if (e.count > AGENT_MAX_PER_MIN) { const r = 60 - Math.floor((now - e.windowStart) / 1000); return { retryAfter: Math.max(1, r), reason: 'agent request limit reached — slow down and let JARV catch up' }; }
+  return { ok: true };
+}
+function agentBusy(key, busy) {
+  const c = agentInflight.get(key) || 0;
+  agentInflight.set(key, Math.max(0, busy === true ? c + 1 : c - 1));
+  if (busy !== true && c <= 0) agentInflight.delete(key);
+}
+
 function validatePasswordStrength(password) {
   const errors = [];
   if (password.length < 8) errors.push('Password must be at least 8 characters');
@@ -105,6 +129,7 @@ const genieMesh = require('./genieMesh');
 const locationService = require('./locationService');
 const locService = locationService.makeLocationService({ pool, log: console });
 const aiBridge = require('./aiBridge');
+const aiKeys = require('./aiKeys');
 const ai = aiBridge.makeAiBridge({ pool, log: console, config: process.env, getMesh: () => mesh });
 const mesh = genieMesh.makeMesh({ pool, log: console, ai, location: locService });
 const jarvAgent = require('./jarvAgent');
@@ -115,6 +140,8 @@ mesh.setLocation(locService);
 // ports) so JARV-Genie keeps an always-available path behind CGNAT/satellite.
 const telegramTunnel = require('./telegramTunnel');
 const telegram = telegramTunnel.makeTelegramTunnel({ pool, mesh, log: console, config: process.env, jarv });
+// JARV MCP server — exposes the hub's tools to AI coding clients over SSE.
+const jarvMcp = require('./jarvMcp');
 
 io.on('connection', socket => {
   socket.on('subscribe:profile', profileId => {
@@ -1031,6 +1058,272 @@ app.get('/api/osint/globe', async (req, res) => {
     const groups = String(req.query.satellites || 'starlink,oneweb,iridium-next,gps').replace(/\s+/g, '');
     const out = await jarv.executeTool('jarv_globe', { satellites: groups });
     return res.json(out);
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ---- JARV command-center chat (browser-facing, under regular auth) ----
+app.post('/api/jarv/chat', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to talk to JARV' });
+  const agentKey = req.userId ? ('u:' + req.userId) : ('d:' + (req.deviceId || 'anon'));
+  const rl = checkAgentRate(agentKey);
+  if (!rl.ok) return res.status(429).json({ error: rl.reason, retryAfter: rl.retryAfter });
+  agentBusy(agentKey, true);
+  try {
+    const body = (req.body || {});
+    const input = body.message;
+    let history = (body.history || []).filter((m) => m && ['user', 'assistant'].includes(m.role));
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      return res.status(400).json({ error: 'message required' });
+    }
+    // Overload caps: a "text bomb" can only carry up to 8KB of new text and a
+    // bounded history; nothing beyond that can bloat the model context.
+    history = history.slice(-24);
+    const historyChars = history.reduce((n, m) => n + String(m.content || '').length, 0);
+    if (historyChars > 60000) history = history.slice(0, 0); // lethal-size histories discarded
+    if (history.length) {
+      history.push({ role: 'user', content: String(input).slice(0, 8000) });
+    }
+    const maxTokens = Math.min(Math.max(Number(body.max_tokens) || 900, 64), 4096);
+    const out = await jarv.ask(history.length ? history : input, {
+      max_tokens: maxTokens,
+      model: body.model || undefined,
+      budgetMs: 240000,
+    });
+    if (!out || !out.ok) return res.status(500).json({ error: (out && out.error) || 'JARV relay failed' });
+    return res.json({
+      ok: true,
+      reply: out.reply,
+      provider: out.provider || 'jarv-mesh',
+      model: out.model || null,
+      turns: out.turns || 1,
+      toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+      blocked: out.blocked || [],
+    });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    res.status(500).json({ error: /JARV_POLICY_BLOCK/.test(msg) ? msg : `JARV relay error: ${msg}` });
+  } finally {
+    agentBusy(agentKey, false);
+  }
+});
+
+// ---- JARV CLI + Code editor (browser-facing, under regular auth) ----
+// ---- JARV operator approvals (allow once / allow in session / allow all) ----
+const jarvApprovals = new Map(); // key -> { tools:Set, shell:bool, net:bool, until:ms }
+const APPROVAL_TTL_MS = 8 * 60 * 60 * 1000; // 8-hour session approval
+
+function approvalKey(req) { return req.userId ? ('u:' + req.userId) : ('d:' + (req.deviceId || 'anon')); }
+
+function approvalSession(req) {
+  const key = approvalKey(req);
+  let s = jarvApprovals.get(key);
+  if (!s || s.until <= Date.now()) {
+    s = { tools: new Set(), shell: false, net: false, until: Date.now() + APPROVAL_TTL_MS };
+    jarvApprovals.set(key, s);
+  }
+  return s;
+}
+
+function grantApproval(req, mode, sess) {
+  const s = sess || approvalSession(req);
+  if (mode === 'session') {
+    ['jarv_write', 'jarv_edit', 'jarv_run'].forEach((t) => s.tools.add(t));
+    s.shell = true;
+    s.net = true;
+  } else if (mode === 'all') {
+    const upd = { JARV_AUTONOMOUS_SHELL: '1', JARV_AUTONOMOUS_NET: '1' };
+    try { aiKeys.upsertEnv(upd); } catch (e) { /* non-fatal */ }
+    process.env.JARV_AUTONOMOUS_SHELL = '1';
+    process.env.JARV_AUTONOMOUS_NET = '1';
+    ['jarv_write', 'jarv_edit', 'jarv_run'].forEach((t) => s.tools.add(t));
+    s.shell = true;
+    s.net = true;
+  }
+  return s;
+}
+
+function shellAllowed(req, sess, once) {
+  return !!(once || process.env.JARV_AUTONOMOUS_SHELL === '1' || sess.shell);
+}
+
+function netAllowed(req, sess, once) {
+  return !!(once || process.env.JARV_AUTONOMOUS_NET === '1' || sess.net);
+}
+
+app.get('/api/jarv/workspace', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const caps = await jarv.getCapabilities();
+    const sess = approvalSession(req);
+    return res.json({
+      ok: true,
+      sandboxRoot: caps.sandboxRoot,
+      policy: caps.policy,
+      autonomousShell: process.env.JARV_AUTONOMOUS_SHELL === '1',
+      autonomousNet: process.env.JARV_AUTONOMOUS_NET === '1',
+      sessionShell: sess.shell,
+      sessionNet: sess.net,
+      sessionTools: [...sess.tools],
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/settings/autonomy', async (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const b = (req.body || {});
+    const updates = {};
+    if (typeof b.shell === 'boolean') updates.JARV_AUTONOMOUS_SHELL = b.shell ? '1' : '0';
+    if (typeof b.net === 'boolean') updates.JARV_AUTONOMOUS_NET = b.net ? '1' : '0';
+    if (Object.keys(updates).length) {
+      try { aiKeys.upsertEnv(updates); } catch (e) { /* non-fatal */ }
+      for (const [k, v] of Object.entries(updates)) { if (v === '1') process.env[k] = '1'; else delete process.env[k]; }
+    }
+    if (b.resetSession) jarvApprovals.delete(approvalKey(req));
+    const sess = approvalSession(req);
+    return res.json({ ok: true, autonomousShell: process.env.JARV_AUTONOMOUS_SHELL === '1', autonomousNet: process.env.JARV_AUTONOMOUS_NET === '1', sessionShell: sess.shell, sessionNet: sess.net });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/jarv/cli', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to use the JARV terminal' });
+  const agentKey = req.userId ? ('u:' + req.userId) : ('d:' + (req.deviceId || 'anon'));
+  const rl = checkAgentRate(agentKey);
+  if (!rl.ok) return res.status(429).json({ error: rl.reason, retryAfter: rl.retryAfter });
+  agentBusy(agentKey, true);
+  try {
+    const body = (req.body || {});
+    const line = String(body.command || '').trim();
+    if (!line) return res.status(400).json({ error: 'command required' });
+    const session = approvalSession(req);
+    const once = body.unlock === true || body.approval === 'once';
+    grantApproval(req, body.approval, session);
+    const approvedShell = shellAllowed(req, session, once);
+    const approvedNet = netAllowed(req, session, once);
+    const toolsUnlocked = new Set(['jarv_write', 'jarv_edit', 'jarv_run'].filter((t) => once || approvedShell || session.tools.has(t)));
+
+    const first = line.split(/\s+/)[0];
+    const toolMatch = line.match(/^(\S+)\s+(.+)$/);
+    const hasTool = jarv.getToolDefs && jarv.getToolDefs().some((t) => t.name === first);
+    if (hasTool) {
+      const name = first;
+      const argStr = toolMatch ? toolMatch[2] : '';
+      let args = {};
+      if (argStr) {
+        try {
+          args = JSON.parse(argStr);
+        } catch (e) {
+          if (name.startsWith('jarv_write')) { const i = argStr.indexOf(' '); args = { path: (i > 0 ? argStr.slice(0, i) : argStr).trim(), content: i > 0 ? argStr.slice(i + 1) : '' }; }
+          else if (name.startsWith('jarv_edit')) { const p = argStr.split('|'); args = { path: (p[0] || '').trim(), search: p[1] || '', replace: p[2] || '' }; }
+          else if (name.startsWith('jarv_run')) args = { command: argStr };
+          else args = { path: argStr };
+        }
+      }
+      if ((name.startsWith('jarv_satvision') || name.startsWith('jarv_globe')) && !args.satellites) args.satellites = 'starlink,oneweb,iridium-next,gps';
+      let out;
+      if ((name === 'jarv_run' || name === 'jarv_write' || name === 'jarv_edit') && !toolsUnlocked.has(name)) {
+        out = { ok: false, error: `JARV_POLICY_BLOCK: ${name} needs operator approval. Re-run it with approval 'once', 'session' or 'all' (or tick "approve write/edit/run").` };
+      } else {
+        out = await jarv.executeTool(name, args);
+      }
+      if (out && out.ok === false && /JARV_POLICY_BLOCK/.test(out.error || '')) {
+        return res.json({ ok: false, tool: name, blocked: [{ name, args, reason: 'requires-operator-approval' }], needsApproval: [{ name, args, reason: 'requires-operator-approval' }], error: out.error });
+      }
+      return res.json(Object.assign({ ok: !!out.ok, tool: name, command: line }, out || {}, { blocked: false }));
+    }
+
+    const out = await jarv.ask(line, {
+      max_tokens: body.max_tokens || 1200,
+      model: body.model || undefined,
+      unlock: toolsUnlocked.size ? [...toolsUnlocked] : [],
+      allowShell: approvedShell,
+      allowNet: approvedNet,
+    });
+    const blocked = out.blocked || [];
+    if (blocked.length && !once && !session.tools.size && !approvedShell) {
+      return res.json({
+        ok: out.ok, reply: out.reply, provider: out.provider, model: out.model, turns: out.turns,
+        toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+        blocked,
+        needsApproval: blocked.map((b) => ({ name: b.name, args: b.args, reason: b.reason })),
+        approval: 'pending',
+      });
+    }
+    return res.json({ ok: out.ok, reply: out.reply, provider: out.provider, model: out.model, turns: out.turns, toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })), blocked, error: out.error });
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    res.status(500).json({ error: /JARV_POLICY_BLOCK/.test(msg) ? msg : `JARV terminal error: ${msg}` });
+  } finally {
+    agentBusy(agentKey, false);
+  }
+});
+
+// ---- JARV Code editor (structured IDE endpoints for the sandbox) ----
+app.get('/api/jarv/code/list', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { return res.json(await jarv.listDir(req.query.path || '')); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.get('/api/jarv/code/read', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { return res.json(await jarv.readFile(req.query.path || '')); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/jarv/code/write', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { const b = req.body || {}; return res.json(await jarv.writeFile(b.path, b.content)); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/jarv/code/edit', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { const b = req.body || {}; const out = await jarv.fileEdit(b.path, b.search, b.replace); return res.json({ ok: !!out.ok, error: out.error, path: b.path }); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/jarv/code/run', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const b = req.body || {};
+    const line = String(b.command || '').trim();
+    if (!line) return res.status(400).json({ error: 'command required' });
+    if (jarv.isBlocked && jarv.isBlocked(line)) return res.json({ ok: false, error: 'JARV_POLICY_BLOCK: command blocked by JARV safety blocklist' });
+    return res.json(await jarv.execAllowlist(line));
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.get('/api/jarv/code/root', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { const caps = await jarv.getCapabilities(); return res.json({ ok: true, sandboxRoot: caps.sandboxRoot, policy: caps.policy }); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.get('/api/jarv/code/tools', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try { return res.json({ ok: true, tools: jarv.getToolDefs() }); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ---- JARV MCP (Model Context Protocol) — SSE server for AI coding tools ----
+const mcpSessions = new Map();
+const mcpSse = jarvMcp.makeSseHandler({ jarv, log: console, sessions: mcpSessions });
+app.get('/api/jarv/mcp', (req, res) => { mcpSse.get(req, res).catch((e) => { if (!res.headersSent) res.status(500).end(String(e && e.message || e)); }); });
+app.post('/api/jarv/mcp', (req, res) => { mcpSse.post(req, res).catch((e) => { if (!res.headersSent) res.status(500).end(String(e && e.message || e)); }); });
+app.get('/api/jarv/mcp/info', (req, res) => {
+  res.json({ name: 'fortress-hub-jarv', version: '1.0.0', transport: 'sse', tools: jarv.getToolDefs().map((t) => t.name), connect: `${req.protocol}://${req.get('host')}/api/jarv/mcp` });
+});
+
+// ---- Settings: cloud API key management (requires a logged-in user) ----
+app.get('/api/ai/providers', (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const chain = ai.getStatus().providers || [];
+    return res.json({ ok: true, providers: aiKeys.listKeys(chain) });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/ai/keys', (req, res) => {
+  if (!req.userId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const chain = ai.getStatus().providers || [];
+    const out = aiKeys.saveKeys((req.body && req.body.keys) || {}, chain);
+    return res.json({ ok: true, ...out });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 

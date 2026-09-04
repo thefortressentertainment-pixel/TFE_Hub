@@ -44,27 +44,57 @@ const DEFAULT_MODELS = ['deepseek-v4', 'deepseek-chat', 'deepseek-reasoner'];
  * Order here is the default failover order; override with GENIE_AI_PROVIDERS.
  */
 const PROVIDERS = [
-  { name: 'groq', baseUrl: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY',
-    models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'] },
-  { name: 'cerebras', baseUrl: 'https://api.cerebras.ai/v1', keyEnv: 'CEREBRAS_API_KEY',
-    models: ['llama-3.3-70b', 'llama3.1-8b'] },
-  { name: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY',
-    models: ['gemini-2.0-flash', 'gemini-2.5-flash'] },
-  { name: 'mistral', baseUrl: 'https://api.mistral.ai/v1', keyEnv: 'MISTRAL_API_KEY',
-    models: ['mistral-small-latest', 'open-mistral-nemo'] },
+  // Validated live (2026-09): these currently serve chat with the keys in .env.
   { name: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY',
-    models: ['deepseek/deepseek-chat-v3.1:free', 'meta-llama/llama-3.3-70b-instruct:free', 'qwen/qwen-2.5-72b-instruct:free', 'google/gemma-3-27b-it:free'] },
+    models: ['z-ai/glm-5.2:free', 'nvidia/nemotron-3.5-lightning:free', 'liquid/lfm-2.5-2.6b:free'] },
   { name: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', keyEnv: 'NVIDIA_API_KEY',
-    models: ['meta/llama-3.1-8b-instruct', 'meta/llama-3.3-70b-instruct'] },
-  { name: 'sambanova', baseUrl: 'https://api.sambanova.ai/v1', keyEnv: 'SAMBANOVA_API_KEY',
-    models: ['Meta-Llama-3.1-8B-Instruct', 'Meta-Llama-3.3-70B-Instruct'] },
-  { name: 'github', baseUrl: 'https://models.github.ai/inference', keyEnv: 'GITHUB_MODELS_TOKEN',
-    models: ['openai/gpt-4o-mini', 'meta/Llama-3.1-8B-Instruct'] },
+    models: ['deepseek-ai/deepseek-v4-flash-0731'] },
   { name: 'cohere', baseUrl: 'https://api.cohere.ai/compatibility/v1', keyEnv: 'COHERE_API_KEY',
-    models: ['command-r7b-12-2024'] },
+    models: ['command-a-03-2025', 'command-r7b-12-2024', 'command-r-08-2024'] },
+  { name: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', keyEnv: 'GEMINI_API_KEY',
+    models: ['gemini-3-flash-preview', 'gemini-flash-latest'] },
+  { name: 'mistral', baseUrl: 'https://api.mistral.ai/v1', keyEnv: 'MISTRAL_API_KEY',
+    models: ['mistral-small-latest', 'mistral-small-2603'] },
+  // Billing/org-blocked or key-invalidated out of the live chain (kept in the
+  // registry for the Settings panel): empty models = skipped instantly.
+  { name: 'groq', baseUrl: 'https://api.groq.com/openai/v1', keyEnv: 'GROQ_API_KEY',
+    models: [] }, // org-level model blocks (403)
+  { name: 'cerebras', baseUrl: 'https://api.cerebras.ai/v1', keyEnv: 'CEREBRAS_API_KEY',
+    models: [] }, // payment required (402)
+  { name: 'sambanova', baseUrl: 'https://api.sambanova.ai/v1', keyEnv: 'SAMBANOVA_API_KEY',
+    models: [] }, // payment required (402)
+  { name: 'github', baseUrl: 'https://models.github.ai/inference', keyEnv: 'GITHUB_MODELS_TOKEN',
+    models: [] }, // GitHub Models retirement brownout (410)
+  { name: 'huggingface', baseUrl: 'https://router.huggingface.co/v1', keyEnv: 'HUGGINGFACE_API_KEY',
+    models: [] }, // inference credits depleted (402)
+  { name: 'nebius', baseUrl: 'https://api.studio.nebius.ai/v1', keyEnv: 'NEBIUS_API_KEY',
+    models: [] }, // API key rejected (401)
+  { name: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', keyEnv: 'SILICONFLOW_API_KEY',
+    models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct', 'THUDM/glm-4-9b-chat'] },
+  { name: 'together', baseUrl: 'https://api.together.xyz/v1', keyEnv: 'TOGETHER_API_KEY',
+    models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct'] },
+  { name: 'fireworks', baseUrl: 'https://api.fireworks.ai/inference/v1', keyEnv: 'FIREWORKS_API_KEY',
+    models: ['accounts/fireworks/models/llama-v3p1-70b-instruct', 'accounts/fireworks/models/deepseek-v3'] },
+  { name: 'scaleway', baseUrl: 'https://api.scaleway.ai/v1', keyEnv: 'SCALEWAY_API_KEY',
+    models: ['meta-llama/llama-3.1-70b-instruct', 'qwen/qwen2.5-72b-instruct'] },
+  { name: 'zai', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', keyEnv: 'ZAI_API_KEY',
+    models: ['glm-4-plus', 'glm-4-flash', 'glm-4-air'] },
+  { name: 'venice', baseUrl: 'https://api.venice.ai/api/v1', keyEnv: 'VENICE_API_KEY',
+    models: ['deepseek-r1-0528', 'llama-3.3-70b'] },
+  { name: 'hyperbolic', baseUrl: 'https://api.hyperbolic.xyz/v1', keyEnv: 'HYPERBOLIC_API_KEY',
+    models: ['meta-llama/Llama-3.3-70B-Instruct', 'Qwen/Qwen2.5-72B-Instruct'] },
+  { name: 'novita', baseUrl: 'https://api.novita.ai/v3/openai', keyEnv: 'NOVITA_API_KEY',
+    models: ['meta-llama/llama-3.3-70b-instruct', 'deepseek/deepseek-v3'] },
+  // Cloudflare Workers AI — OpenAI-compatible; URL needs the account id embedded.
+  { name: 'cloudflare', keyEnv: 'CLOUDFLARE_API_KEY', baseUrlpHolder: '{CLOUDFLARE_ACCOUNT_ID}',
+    baseUrl: 'https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/v1',
+    models: ['@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.3-70b-instruct-fp8-fast', '@cf/qwen/qwen2.5-72b-instruct', '@cf/openai/gpt-oss-120b'] },
   // LOCAL offline tier: quantized models on this machine. No key, no internet.
+  // qwen2.5:1.5b first — ~0.99GB (half of llama3.2) on 8GB machines, and it has
+  // native function/tool-calling, so JARV Tools + vibe-coding keep working.
+  // llama3.2 was dropped from the default chain (too heavy for 8GB RAM; hangs).
   { name: 'ollama', baseUrl: null, keyEnv: null, local: true,
-    models: ['llama3.2', 'qwen3:1.7b', 'qwen2.5:0.5b'] },
+    models: ['qwen2.5:1.5b', 'qwen2.5:0.5b'] },
   // Keyless anonymous relay — last resort only (rate-limited, no SLA).
   { name: 'pollinations', baseUrl: 'https://text.pollinations.ai', keyEnv: null, anonymous: true,
     models: ['openai'] },
@@ -199,7 +229,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
 
   function localModels() {
     const o = PROVIDERS.find((p) => p.name === 'ollama');
-    return cfg.ollamaModels.length ? cfg.ollamaModels.slice() : (o ? o.models.slice() : ['llama3.2']);
+    return cfg.ollamaModels.length ? cfg.ollamaModels.slice() : (o ? o.models.slice() : ['qwen2.5:1.5b', 'qwen2.5:0.5b']);
   }
 
   /** Ordered attempt list. forceLocal pins to on-machine Ollama (privacy). */
@@ -216,7 +246,16 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
       });
     }
     let keyed = PROVIDERS.filter((p) => p.keyEnv && resolveKey(p.keyEnv))
-      .map((p) => ({ name: p.name, baseUrl: p.baseUrl, apiKey: resolveKey(p.keyEnv), models: p.models.slice() }));
+      .map((p) => {
+        let baseUrl = p.baseUrl;
+        if (p.baseUrlpHolder) {
+          const holderKey = p.baseUrlpHolder;
+          const accountId = String(config[holderKey] != null ? config[holderKey] : (process.env[holderKey] || '')).trim();
+          if (accountId) baseUrl = String(p.baseUrl).split(holderKey).join(accountId);
+        }
+        return { name: p.name, baseUrl, apiKey: resolveKey(p.keyEnv), models: p.models.slice() };
+      })
+      .filter((e) => e.baseUrl && !e.baseUrl.includes('{'));
     if (cfg.providerOrder.length) {
       keyed.sort((a, b) => {
         const ia = cfg.providerOrder.indexOf(a.name);

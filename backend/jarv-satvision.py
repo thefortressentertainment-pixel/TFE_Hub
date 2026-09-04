@@ -14,12 +14,14 @@ Usage from JARV (via jarv_run):
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from orbitdeck.engine import SatDb, Predictor, Observer
 
 
@@ -31,24 +33,80 @@ CELESTRAK_GROUPS = {
     "globalstar": "globalstar",
     "gps": "gps-ops",
     "galileo": "galileo",
-    "glonass": "glonass",
+    "glonass": "glo-ops",
     "beidou": "beidou",
     "geo": "geo",
+    "stations": "stations",
+    "iss": "stations",
     "active": "active",
 }
+
+# Reachable CelesTrak mirrors for when celestrak.org itself is unreachable
+# from this network. Preference order in fetch_tle_group():
+#   CelesTrak (authoritative) -> retlector.eu (full OMM groups, live) ->
+#   tle.ivanstanojevic.me (classic lines, hard-capped at 20 results).
+RETLECTOR_API = "https://retlector.eu"          # ReTLEctor: GROUPME/json -> OMM array
+# Groups retlector.eu does not serve directly are satisfied from its
+# "active-no-starlink" (full live catalog minus Starlink) with a name filter.
+RETLECTOR_OVERRIDE = {
+    "iridium": ("active-no-starlink", lambda o: "IRIDIUM" in (o.get("OBJECT_NAME") or "").upper()),
+    "iridium-next": ("active-no-starlink", lambda o: "IRIDIUM" in (o.get("OBJECT_NAME") or "").upper()),
+}
+MIRROR_API = "https://tle.ivanstanojevic.me/api/tle"
+MIRROR_SEARCH = {
+    "starlink": "starlink",
+    "oneweb": "oneweb",
+    "iridium": "iridium",
+    "iridium-next": "iridium",
+    "globalstar": "globalstar",
+    "gps": "navstar",
+    "galileo": "galileo",
+    "glonass": "glonass",
+    "beidou": "beidou",
+    "iss": "iss",
+}
+MIRROR_CAP = 1000  # bounded pagination; plenty for the globe projection
+OVERHEAD_SCAN_CAP = 3000  # even per-group sample; the whole sky, not the whole catalog
+OVERHEAD_MAX_RESULTS = 120  # top-N by elevation handed to the AI (keeps output small)
+PASS_SCAN_CAP = 1000  # even per-group sample for pass windows (each is a time search)
+PASS_RESULT_CAP = 300  # best pass windows by max elevation handed to the AI
 
 RE_KM = 6378.135
 
 CACHE_FRESH_SECS = 2 * 3600  # CelesTrak refreshes GROUPs roughly every 2 hours
 
+# Name keywords don't always contain the group slug (e.g. "IRIDIUM 104"),
+# so match on aliases when tagging/filtering.
+GROUP_ALIASES = {
+    "starlink": ["starlink"],
+    "oneweb": ["oneweb"],
+    "iridium": ["iridium"],
+    "iridium-next": ["iridium"],
+    "gps": ["gps", "navstar"],
+    "galileo": ["galileo"],
+    "glonass": ["glonass", "cosmos "],
+    "beidou": ["beidou"],
+    "geo": [],
+    "globalstar": ["globalstar"],
+    "iss": ["iss", "zarya", "yymt"],
+    "active": [],
+}
+
+ALL_GROUPS = list(CELESTRAK_GROUPS.keys())
+
 
 def fetch_tle_group(group: str) -> str:
-    """Fetch TLE data from CelesTrak for a group, with a retry/backoff and a
-    persistent on-disk cache so a flaky or rate-limited CelesTrak (503/403,
-    the documented 'reuse cached data' cases) never blinds the tunnel.
+    """Fetch TLE data for a group with a persistent on-disk cache and a
+    three-source strategy:
+      1. CelesTrak (authoritative; short timeout so an unreachable network
+         fails fast instead of hanging the globe for minutes).
+      2. retlector.eu (ReTLEctor) — the full live CelesTrak group as OMM JSON,
+         reached the moment CelesTrak cannot be reached.
+      3. tle.ivanstanojevic.me mirror (classic line1/line2 -> OMM), a smaller
+         fallback capped at MIRROR_CAP results.
 
-    Strategy: serve from cache when it is young (< CACHE_FRESH_SECS), else try
-    the network; on failure fall back to any cached copy, whatever its age.
+    Serve from cache when it is young (< CACHE_FRESH_SECS); on total failure
+    fall back to any cached copy, whatever its age.
     """
     cache_group = group
     fetch_group = CELESTRAK_GROUPS.get(group, "active")
@@ -57,34 +115,166 @@ def fetch_tle_group(group: str) -> str:
     if cached and time.time() - cached.get("fetched_at", 0) < CACHE_FRESH_SECS:
         print(f"Using fresh cached TLE for {cache_group}", file=sys.stderr)
         return cached["data"]
+
+    data = None
+    source = None
+    rt_group, rt_filter = RETLECTOR_OVERRIDE.get(group, (fetch_group, None))
+    for src_name, fn in (
+        ("CelesTrak", lambda: _fetch_celestrak(fetch_group)),
+        ("retlector.eu", lambda: _fetch_retlector(rt_group, rt_filter)),
+        ("tle.ivanstanojevic.me", lambda: _fetch_mirror_tle(group)),
+    ):
+        data = fn()
+        if data is not None:
+            source = src_name
+            break
+    if data is not None:
+        cache[cache_group] = {"fetched_at": time.time(), "data": data, "source": source}
+        save_cache(cache)
+        print(f"Fetched {cache_group} from {source}", file=sys.stderr)
+        return data
+    if cached:
+        print(f"Using stale cached TLE for {cache_group}", file=sys.stderr)
+        return cached["data"]
+    raise RuntimeError(f"no TLE for {cache_group} (CelesTrak unreachable and mirror unavailable)")
+
+
+def _fetch_celestrak(fetch_group: str):
+    """Best-effort CelesTrak fetch. Throttle responses (403/429/503) retry
+    briefly; connection-level failures (blocked network) bail immediately."""
     url = f"https://celestrak.org/NORAD/elements/gp.php?GROUP={fetch_group}&FORMAT=json"
     req = urllib.request.Request(url, headers={"User-Agent": "jarv-satvision/1.0"})
-    last_err = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = resp.read().decode("utf-8")
-            cache[cache_group] = {"fetched_at": time.time(), "data": data}
-            save_cache(cache)
-            print(f"Fetched {cache_group} from CelesTrak", file=sys.stderr)
-            return data
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
-            last_err = e
             if e.code in (403, 429, 503):
-                wait = 8 * (attempt + 1)
-                print(f"TLE fetch {cache_group}: HTTP {e.code} (throttled) — retry in {wait}s", file=sys.stderr)
-                time.sleep(wait)
+                print(f"CelesTrak {fetch_group}: HTTP {e.code} (throttled) — retry in {5 * (attempt + 1)}s", file=sys.stderr)
+                time.sleep(5 * (attempt + 1))
                 continue
-            break
+            return None
         except Exception as e:
-            last_err = e
-            wait = 4 * (attempt + 1)
-            print(f"TLE fetch {cache_group} failed ({e}) — retry in {wait}s", file=sys.stderr)
-            time.sleep(wait)
-    if cached:
-        print(f"Using stale cached TLE for {cache_group} ({last_err})", file=sys.stderr)
-        return cached["data"]
-    raise last_err if last_err else RuntimeError(f"no TLE for {cache_group}")
+            print(f"CelesTrak unreachable for {fetch_group} ({e}) — using mirror", file=sys.stderr)
+            return None
+    return None
+
+
+def _tle_num(field) -> float:
+    """Decode a TLE numeric subfield: normal decimals, implied-decimal mantissas,
+    and exponent forms like ' 39011-3' -> 0.39011e-3."""
+    s = str(field).strip()
+    if not s:
+        return 0.0
+    if "." in s:
+        return float(s)
+    m = re.search(r"([+-]\d{1,2})$", s)
+    if m and m.start() > 0:
+        body = s[:m.start()]
+        exp = int(m.group(1))
+        sign = -1.0 if body.startswith("-") else 1.0
+        digits = re.sub(r"\D", "", body.lstrip("+-"))
+        val = float("0." + digits) if digits else 0.0
+        return sign * val * (10 ** exp)
+    return float(s)
+
+
+def _tle_to_omm(member: dict) -> dict:
+    """Convert a mirror {name, satelliteId, date, line1, line2} entry to the OMM
+    element-set dict that orbitdeck's _ingest() expects."""
+    try:
+        line1 = (member.get("line1") or "").strip()
+        line2 = (member.get("line2") or "").strip()
+        if len(line1) < 68 or len(line2) < 68:
+            return None
+        satnum = int(line1[2:7])
+        ey = int(line1[18:20])
+        year = 2000 + ey if ey < 57 else 1900 + ey
+        doy = float(line1[20:32])
+        epoch = (datetime(year, 1, 1, tzinfo=timezone.utc) + timedelta(days=doy - 1))
+        ecc = float("0." + line2[26:33].strip()) if "." not in line2[26:33] else float(line2[26:33])
+        intl_des = line1[9:17].strip()
+        elset = line1[64:68].strip()
+        return {
+            "OBJECT_NAME": (member.get("name") or "")[:25],
+            "OBJECT_ID": intl_des or f"{satnum:05d}",
+            "EPOCH": epoch.strftime("%Y-%m-%dT%H:%M:%S.000000"),
+            "NORAD_CAT_ID": satnum,
+            "INCLINATION": _tle_num(line2[8:16]),
+            "RA_OF_ASC_NODE": _tle_num(line2[17:25]),
+            "ECCENTRICITY": ecc,
+            "ARG_OF_PERICENTER": _tle_num(line2[34:42]),
+            "MEAN_ANOMALY": _tle_num(line2[43:51]),
+            "MEAN_MOTION": _tle_num(line2[52:63]),
+            "BSTAR": _tle_num(line1[53:61]),
+            "MEAN_MOTION_DOT": _tle_num(line1[33:43]),
+            "MEAN_MOTION_DDOT": _tle_num(line1[44:52]),
+            "REV_AT_EPOCH": int(_tle_num(line2[63:68])) if line2[63:68].strip() else 0,
+            "ELEMENT_SET_NO": int(elset) if elset.isdigit() else 1,
+        }
+    except Exception as e:
+        print(f"TLE->OMM skip ({member.get('name')}): {e}", file=sys.stderr)
+        return None
+
+
+def _fetch_mirror_tle(group: str):
+    """Fetch classic TLE lines from the mirror, convert to OMM JSON,
+    bounded by MIRROR_CAP to keep the fetch quick."""
+    query = MIRROR_SEARCH.get(group)
+    if not query:
+        return None
+    out = []
+    offset = 0
+    limit = 20  # mirror hard-caps pages at 20 regardless of requested limit
+    while offset < MIRROR_CAP:
+        url = f"{MIRROR_API}?search={urllib.parse.quote(query)}&limit={limit}&offset={offset}"
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/json",
+            "User-Agent": "jarv-satvision/1.0",
+        })
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.load(resp)
+        member = (data or {}).get("member") or []
+        total = (data or {}).get("totalItems") or 0
+        for m in member:
+            omm = _tle_to_omm(m)
+            if omm:
+                out.append(omm)
+        got = len(member)
+        print(f"mirror {group}: fetched {got} (have {len(out)}/{total}, cap {MIRROR_CAP})", file=sys.stderr)
+        if got < limit or 0 < total <= len(out):
+            break
+        offset += got
+    return json.dumps(out) if out else None
+
+
+def _fetch_retlector(fetch_group: str, name_filter=None):
+    """Full-group OMM JSON from the ReTLEctor CelesTrak mirror (retlector.eu).
+    Returns raw JSON text (an OMM array) exactly like CelesTrak FORMAT=json.
+    name_filter, when supplied, is applied client-side (used for groups that
+    the mirror satisfies out of 'active-no-starlink')."""
+    url = f"{RETLECTOR_API}/{fetch_group}/json"
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "User-Agent": "jarv-satvision/1.0",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            raw = resp.read().decode("utf-8")
+        arr = json.loads(raw)
+        if not isinstance(arr, list) or not arr:
+            print(f"retlector.eu {fetch_group}: empty or bad payload", file=sys.stderr)
+            return None
+        if name_filter:
+            wanted = [o for o in arr if name_filter(o)]
+            print(f"retlector.eu {fetch_group}: {len(arr)} -> {len(wanted)} after filter", file=sys.stderr)
+            if not wanted:
+                return None
+            return json.dumps(wanted)
+        return raw
+    except Exception as e:
+        print(f"retlector.eu fetch failed for {fetch_group} ({e})", file=sys.stderr)
+        return None
 
 
 def cache_file() -> str:
@@ -117,13 +307,22 @@ def save_cache(cache: dict) -> None:
 
 
 def load_catalog(groups: list[str]) -> SatDb:
-    """Load TLE catalog for specified satellite groups."""
+    """Load TLE catalog for specified satellite groups, tagging provenance.
+
+    Uses _ingest(replace=False) so multiple groups accumulate in one SatDb
+    (load_gp_json would replace the catalog on every group).
+    """
     db = SatDb()
     total = 0
     for group in groups:
         try:
             data = fetch_tle_group(group)
-            count = db.load_gp_json(data)
+            parsed = data if isinstance(data, list) else json.loads(data)
+            before = {sat.norad for sat in db.sats}
+            count = db._ingest(parsed, replace=False)
+            for sat in db.sats:
+                if sat.norad not in before:
+                    sat.src = group
             total += count
             print(f"Loaded {count} satellites from {group}", file=sys.stderr)
         except Exception as e:
@@ -132,13 +331,20 @@ def load_catalog(groups: list[str]) -> SatDb:
     return db
 
 
+def _group_matches(sat, group: str) -> bool:
+    src = getattr(sat, "src", None)
+    if src:
+        return src == group
+    aliases = GROUP_ALIASES.get(group, [group])
+    name_lower = sat.name.lower()
+    return any(alias in name_lower for alias in aliases)
+
+
 def filter_satellites(db: SatDb, types: list[str]) -> list:
-    """Filter satellites by name/type keywords."""
-    keywords = [t.lower() for t in types]
+    """Filter satellites by requested groups (name aliases + load provenance)."""
     result = []
     for sat in db.sats:
-        name_lower = sat.name.lower()
-        if any(kw in name_lower for kw in keywords):
+        if any(_group_matches(sat, t) for t in types):
             result.append(sat)
     return result
 
@@ -168,12 +374,35 @@ def get_sat_position(sat, observer: Observer, unix: float):
     return pred.subpoint_at(unix)
 
 
-def predict_passes(db: SatDb, observer: Observer, satellites: list, min_el: float, max_n: int):
-    """Predict passes for a list of satellites."""
-    results = []
+def _bounded_sample(satellites: list, cap: int) -> list:
+    """Even per-group sample of a satellite list, so one giant constellation
+    cannot dominate (or stall) a query meant over the whole sky."""
+    if len(satellites) <= cap:
+        return satellites
+    by_group = {}
     for sat in satellites:
-        pred = Predictor()
-        pred.set_site(observer)
+        by_group.setdefault(getattr(sat, "src", None) or "other", []).append(sat)
+    per = max(cap // max(len(by_group), 1), 50)
+    out = []
+    for sats in by_group.values():
+        out.extend(sats[:per])
+    return out
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Great-circle ground distance in km."""
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
+    a = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * RE_KM * math.asin(min(1.0, math.sqrt(a)))
+
+
+def predict_passes(db: SatDb, observer: Observer, satellites: list, min_el: float, max_n: int):
+    """Predict passes for a bounded, even per-group sample of satellites."""
+    results = []
+    pred = Predictor()
+    pred.set_site(observer)
+    for sat in _bounded_sample(satellites, PASS_SCAN_CAP):
         pred.set_sat(sat)
         try:
             passes = list(pred.predict_passes(time.time(), min_el=min_el, max_n=max_n))
@@ -191,37 +420,51 @@ def predict_passes(db: SatDb, observer: Observer, satellites: list, min_el: floa
                 })
         except Exception as e:
             print(f"Pass prediction failed for {sat.name}: {e}", file=sys.stderr)
-    return results
+    results.sort(key=lambda x: -x["max_elevation_deg"])
+    return results[:PASS_RESULT_CAP]
 
 
 def get_overhead(db: SatDb, observer: Observer, satellites: list, min_el: float = 10.0):
-    """Get currently overhead satellites above minimum elevation."""
+    """Currently overhead satellites above minimum elevation, computed over an
+    even per-group sample (OVERHEAD_SCAN_CAP) so a full Starlink constellation
+    cannot stall this tool. One Predictor is reused; latitude from azel, then a
+    single SGP4 subpoint per qualifying satellite."""
     now = time.time()
     results = []
-    for sat in satellites:
-        pred = Predictor()
-        pred.set_site(observer)
+    pred = Predictor()
+    pred.set_site(observer)
+    scanned = 0
+    for sat in _bounded_sample(satellites, OVERHEAD_SCAN_CAP):
         pred.set_sat(sat)
         if not pred._have:
             continue
+        scanned += 1
         try:
             az, el = pred.azel_at(now)
             if el >= min_el:
-                range_km = compute_range_km(sat, observer, now)
-                lat, lon, alt = get_sat_position(sat, observer, now)
+                lat, lon, alt = pred.subpoint_at(now)
+                if lat is None or lon is None:
+                    continue
+                if (isinstance(lat, float) and math.isnan(lat)) or (isinstance(lon, float) and math.isnan(lon)):
+                    continue
+                range_km = _haversine_km(observer.lat, observer.lon if hasattr(observer, "lon") else observer.longitude, lat, lon)
                 results.append({
                     "satellite": sat.name,
                     "norad": sat.norad,
                     "elevation_deg": round(el, 1),
                     "azimuth_deg": round(az, 1),
                     "range_km": round(range_km, 1),
-                    "subpoint_lat": round(lat, 4) if lat else None,
-                    "subpoint_lon": round(lon, 4) if lon else None,
-                    "subpoint_alt_km": round(alt, 1) if alt else None,
+                    "subpoint_lat": round(lat, 4),
+                    "subpoint_lon": round(lon, 4),
+                    "subpoint_alt_km": round(alt, 1) if alt is not None else None,
                 })
         except Exception as e:
             print(f"Overhead check failed for {sat.name}: {e}", file=sys.stderr)
-    return sorted(results, key=lambda x: -x["elevation_deg"])
+    results.sort(key=lambda x: -x["elevation_deg"])
+    top = results[:OVERHEAD_MAX_RESULTS]
+    for r in top:
+        r["sample"] = f"{scanned} sats scanned of {len(satellites)} tracked"
+    return top
 
 
 def get_footprint(sat, observer: Observer):
@@ -265,8 +508,10 @@ def get_all_positions(db: SatDb, groups: list[str]) -> list:
             lat, lon, alt = pred.subpoint_at(now)
             if lat is None or lon is None:
                 continue
+            if (isinstance(lat, float) and math.isnan(lat)) or (isinstance(lon, float) and math.isnan(lon)):
+                continue  # decaying/re-entering object whose SGP4 solution blew up
             span = sat.name.lower()
-            group = next((g for g in groups if g.lower() in span), "other")
+            group = next((g for g in groups if _group_matches(sat, g)), getattr(sat, "src", None) or "other")
             out.append({
                 "satellite": sat.name,
                 "norad": sat.norad,

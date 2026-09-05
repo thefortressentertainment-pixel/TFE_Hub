@@ -22,3 +22,6 @@ jarv-data/
 backend/tools/drive/bin/
 backend/tools/drive/*.png
 backend/tools/drive/*.json
+
+# generated Moltis config (contains substituted secrets on install)
+moltis/build/

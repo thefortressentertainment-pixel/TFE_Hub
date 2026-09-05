@@ -1,0 +1,167 @@
+# Moltis — Fortress configuration (static portion).
+# Generated output: moltris/build/moltis.toml (run `moltis/scripts/build-config.js`).
+# The 22-agent roster lives in backend/src/settlement.js (single source of truth);
+# the marker line below is replaced with one [agents.presets.*] stanza per agent.
+
+[server]
+bind = "127.0.0.1"
+port = 63849
+
+[auth]
+disabled = false
+
+[tls]
+enabled = true
+auto_generate = true
+
+# ── Fortress identity: the main Moltis agent commands the settlement ─────────
+# NOTE: validated against `moltis config check` (0.10.18). The full operating
+# doctrine (SOUL) lives in skills/fortress-bridge.md, auto-loaded at boot.
+[identity]
+name = "General Prestyn"
+emoji = "🍄"
+theme = "wasteland commander"
+
+[user]
+# name = "Ace"
+timezone = "America/Los_Angeles"
+
+# ── LLM providers: quantized local models FIRST, cloud as fallback ─────────────
+# The runtime registry only registers BUILT-IN provider slots; custom names
+# (like "opencode") validate in config check but never load.
+# 
+# QUANTIZATION STRATEGY: This config prioritizes small quantized models on the
+# local Ollama tier to avoid burning through cloud provider token limits.
+# M1 Silicon optimization: qwen2.5-coder:0.5b (397MB), qwen2.5:0.5b (397MB) and
+# qwen2.5:1.5b (986MB) run efficiently on Apple Silicon with Metal acceleration.
+[providers]
+offered = ["ollama", "local-llm", "openai", "openrouter"]
+
+# Local quantized models — PRIMARY provider (first tried)
+# Every curated local chat model on this Mac is registered below so it shows up
+# in the gateway's Model Dropdown (web chat) and is switchable at runtime.
+#   qwen2.5-coder:0.5b        fast code/tool-call tuned — hands tiers
+#   qwen2.5:0.5b              smallest, fastest
+#   qwen2.5:1.5b              better quality — reasoning tiers
+#   qwen3:0.6b / qwen3:1.7b   newer Qwen3 family (thinking capable)
+#   llama3.2:3b-instruct-q8_0 strongest local option (3.4GB, Q8)
+#   llama3.2:latest           2.0GB general instruct
+# These use GGUF quantization and run fully offline on your M1 Mac.
+# Quick model switching: `moltis/set-model.sh list|default <m>|split <r> <h>`.
+[providers.ollama]
+enabled = true
+base_url = "http://127.0.0.1:11434"
+models = [
+  "qwen2.5-coder:0.5b", "qwen2.5:0.5b", "qwen2.5:1.5b",
+  "qwen3:0.6b", "qwen3:1.7b", "llama3.2:3b-instruct-q8_0", "llama3.2:latest",
+]
+
+# OpenCode Zen bridge — fallback for complex coding tasks (big-pickle)
+# Only used when local models are insufficient. Requires opencode account session.
+[providers.openai]
+enabled = true
+api_key = "local-bridge"
+base_url = "http://127.0.0.1:63851/v1"
+fetch_models = true
+models = ["big-pickle", "nemotron-3-ultra-free", "mimo-v2.5-free"]
+
+# OpenRouter — final fallback for frontier model access
+[providers.openrouter]
+enabled = true
+api_key = "${OPENROUTER_API_KEY}"
+models = ["nvidia/nemotron-3-ultra-free", "nvidia/nemotron-3.5-lightning:free"]
+base_url = "https://openrouter.ai/api/v1"
+
+# ── Chat ─────────────────────────────────────────────────────────────────────
+[chat]
+message_queue_mode = "collect"
+
+# ── Tools ────────────────────────────────────────────────────────────────────
+
+[tools]
+agent_timeout_secs = 600
+agent_max_iterations = 25
+max_tool_result_bytes = 50000
+
+[tools.exec]
+default_timeout_secs = 60
+max_output_bytes = 204800
+approval_mode = "on-miss"
+security_level = "allowlist"
+allowlist = [
+  "git *", "curl *", "wget *", "python3 *", "pip3 *", "node *", "npm *", "npx *",
+  "ls *", "cat *", "pwd", "echo *", "mkdir *", "cp *", "mv *", "df -h", "ps *",
+  "whoami", "uname *", "sw_vers", "system_profiler *", "lsof *", "brew *",
+]
+# Fortress hands run on the HOST (the Mac), not in a container, so they can
+# touch the machine and the internet. Anything not on the allowlist prompts
+# for approval (approval_mode = "on-miss") — the hub's own hands allowlist
+# still applies for dispatch runs.
+
+# Sandbox OFF = host execution. This is what lets exec reach the Mac + internet.
+[tools.exec.sandbox]
+mode = "off"
+
+[tools.web.search]
+enabled = true
+provider = "brave"
+max_results = 5
+cache_ttl_minutes = 15
+# api_key = "${BRAVE_API_KEY}"   # set when a Brave key is available
+
+[tools.web.fetch]
+enabled = true
+max_chars = 50000
+cache_ttl_minutes = 15
+
+[tools.browser]
+enabled = true
+headless = true
+sandbox = false   # run on the host's Chrome instead of the browserless Docker container
+
+# ── Skills: the fortress bridge doctrine is auto-loaded at boot (see below) ──
+[skills]
+enabled = true
+# The doctrine lives in moltris/skills/fortress-bridge/SKILL.md and install.sh
+# copies it into ~/.moltis/skills/ — the watched dir this build actually scans.
+# (config search_paths did not load repo-side skills; home-dir copy is authoritative.)
+auto_load = ["fortress-bridge"]
+
+# ── Spawn presets (generated from backend/src/settlement.js) ─────────────────
+__AGENTS_PRESETS__
+
+# ── Heartbeat: keep the commander "alive" during active hours ────────────────
+[heartbeat]
+enabled = true
+every = "30m"
+
+[heartbeat.active_hours]
+start = "08:00"
+end = "24:00"
+timezone = "America/Los_Angeles"
+
+# ── Failover chain: quantized local first, then opencode bridge as fallback ─────
+# When Ollama models fail or are overwhelmed, fall back through the chain.
+# Local quantized models are always tried first to conserve cloud tokens.
+[failover]
+enabled = true
+fallback_models = [
+  "ollama/qwen2.5:1.5b", "ollama/qwen2.5-coder:0.5b", "ollama/qwen2.5:0.5b",  # local first
+  "openai/nemotron-3.5-lightning-free",                          # opencode bridge fallback
+  "openrouter/nvidia/nemotron-3.5-lightning:free",               # OpenRouter last resort
+]
+
+# ── Hooks ────────────────────────────────────────────────────────────────────
+# This build registers shell hooks from ~/.moltis/hooks/<name>/HOOK.md (NOT the
+# config [hooks] table). Fortress GatewayStart pinger + doctrine:
+#   i.   ~/.moltis/hooks/fortress-gateway-start/HOOK.md + handler.sh
+#   ii.  ~/.moltis/skills/fortress-bridge/SKILL.md
+# install.sh copies both.
+
+# ── Env injected into the Moltis process at startup ───────────────────────────
+# install.sh substitutes the __SET_BY_INSTALL__ placeholder from backend/.env
+# (OPENROUTER_API_KEY = fallback chain). OPENCODE_API_KEY is retained for direct
+# Zen use but the openai slot now routes through the account-session bridge.
+[env]
+OPENCODE_API_KEY = "__SET_BY_INSTALL__"
+OPENROUTER_API_KEY = "__SET_BY_INSTALL__"

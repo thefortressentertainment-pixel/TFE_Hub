@@ -1,5 +1,6 @@
 {
-  "groups": "starlink,oneweb,iridium-next,gps",
+  "groups": "starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo,iss",
   "min_el": 10,
-  "passes": 3
+  "passes": 3,
+  "lastScanAt": "2026-09-05T02:42:40.996Z"
 }

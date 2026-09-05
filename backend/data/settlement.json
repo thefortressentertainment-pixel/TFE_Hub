@@ -1,15 +1,115 @@
 {
-  "updatedAt": "2026-09-05T02:22:38.552Z",
+  "updatedAt": "2026-09-05T14:32:49.685Z",
   "agents": {
     "core": {
-      "roi": 77,
-      "uses": 1,
-      "lastUsedAt": "2026-09-05T02:21:15.696Z"
+      "roi": 78,
+      "uses": 2,
+      "lastUsedAt": "2026-09-05T14:31:19.588Z"
     },
     "eyebot": {
+      "roi": 79,
+      "uses": 4,
+      "lastUsedAt": "2026-09-05T14:31:35.535Z"
+    },
+    "curie": {
+      "roi": 78,
+      "uses": 2,
+      "lastUsedAt": "2026-09-05T14:31:20.592Z"
+    },
+    "courier": {
       "roi": 76,
       "uses": 1,
-      "lastUsedAt": "2026-09-05T02:22:38.552Z"
+      "lastUsedAt": "2026-09-05T14:30:21.818Z"
+    },
+    "engineer": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:30:41.193Z"
+    },
+    "deathclaw": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:30:56.435Z"
+    },
+    "protectron": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:30:57.334Z"
+    },
+    "engager": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:19.568Z"
+    },
+    "hacker": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:19.709Z"
+    },
+    "paladin": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:19.994Z"
+    },
+    "studio": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:21.137Z"
+    },
+    "ops": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:25.320Z"
+    },
+    "mechanist": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:26.973Z"
+    },
+    "gutsy": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:30.622Z"
+    },
+    "liberty-prime": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:34.596Z"
+    },
+    "broodmother": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:49.678Z"
+    },
+    "mole-ratt": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:31:49.680Z"
+    },
+    "sentry-bot": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:32:25.384Z"
+    },
+    "perimeter-monitor": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:32:29.391Z"
+    },
+    "bloat-fli": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:32:29.505Z"
+    },
+    "strategist": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:32:30.345Z"
+    },
+    "synth": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T14:32:49.685Z"
     }
   }
 }

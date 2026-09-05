@@ -59,7 +59,7 @@ async function main() {
 
   console.log('\n[5] OpenAI tool schema');
   const tools = jarvAgent.getOpenAITools();
-  check('schema exposes 9 tools', Array.isArray(tools) && tools.length === 9);
+  check('schema exposes 10 tools (incl. read-only jarv_git)', Array.isArray(tools) && tools.length === 10);
   const sat = tools.find((t) => t.function.name === 'jarv_satvision');
   check('jarv_satvision lat/lon optional (hub fix default)', !!sat && (sat.function.parameters.required || []).length === 0);
   const locT = tools.find((t) => t.function.name === 'jarv_location');

@@ -1147,7 +1147,7 @@ app.post('/api/jarv/chat', async (req, res) => {
       provider: out.provider || 'jarv-mesh',
       model: out.model || null,
       turns: out.turns || 1,
-      toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+      toolCalls: mapToolCalls(out),
       blocked: out.blocked || [],
     });
   } catch (e) {
@@ -1208,6 +1208,23 @@ function netAllowed(req, sess, once) {
 function sendSse(res, obj) {
   if (res.writableEnded || res.destroyed) return;
   try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch (e) {}
+}
+// Empirical tool audit: emit what the hands ACTUALLY returned (already redacted +
+// framed as untrusted data by jarvAgent) alongside the agent's narration, so an
+// operator can diff claim vs ground truth. No result => the call had none (e.g.
+// "see"), not a hallucinated value.
+function mapToolCalls(out) {
+  const ser = (v) => {
+    if (v === undefined || v === null) return undefined;
+    if (typeof v === 'string') return v.slice(0, 4000);
+    try { return JSON.stringify(v).slice(0, 4000); } catch (e) { return String(v).slice(0, 4000); }
+  };
+  return (out.toolCalls || []).map((t) => {
+    const x = { name: t.name, args: t.args };
+    if (t.result !== undefined && t.result !== null) x.result = ser(t.result);
+    if (t.err !== undefined && t.err !== null) x.err = ser(t.err);
+    return x;
+  });
 }
 function pumpSse(res, text) {
   const CHUNK = 42;
@@ -1379,7 +1396,7 @@ app.post('/api/jarv/cli', async (req, res) => {
         provider: out.provider,
         model: out.model,
         turns: out.turns,
-        toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+        toolCalls: mapToolCalls(out),
         blocked,
         error: out.error,
       });
@@ -1390,13 +1407,13 @@ app.post('/api/jarv/cli', async (req, res) => {
     if (blocked.length && !once && !session.tools.size && !approvedShell) {
       return res.json({
         ok: out.ok, reply: out.reply, provider: out.provider, model: out.model, turns: out.turns,
-        toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+        toolCalls: mapToolCalls(out),
         blocked,
         needsApproval: blocked.map((b) => ({ name: b.name, args: b.args, reason: b.reason })),
         approval: 'pending',
       });
     }
-    return res.json({ ok: out.ok, reply: out.reply, provider: out.provider, model: out.model, turns: out.turns, toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })), blocked, error: out.error });
+    return res.json({ ok: out.ok, reply: out.reply, provider: out.provider, model: out.model, turns: out.turns, toolCalls: mapToolCalls(out), blocked, error: out.error });
   } catch (e) {
     const msg = String((e && e.message) || e);
     res.status(500).json({ error: /JARV_POLICY_BLOCK/.test(msg) ? msg : `JARV terminal error: ${msg}` });
@@ -1498,6 +1515,42 @@ app.post('/api/location/manual', async (req, res) => {
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
+// Fire-and-forget TLE warm-up. Uses the same cache rules as jarv-satvision.py
+// (CACHE_FRESH_SECS = 2h): only fetch when the store is absent or stale, and do
+// it via `--positions` (loads the groups, refreshing their TLE) without an
+// observer. Empirically driven: the decision comes from the cache file's own
+// mtime, not a guess about freshness.
+function warmTleCache() {
+  try {
+    const BACKEND_DIR = path.resolve(__dirname, '..');
+    const cacheFile = path.join(BACKEND_DIR, '..', 'jarv-sandbox', 'tmp', 'tle-cache.json');
+    const CACHE_FRESH_SECS = 2 * 3600;
+    let stale = true;
+    try {
+      const st = fs.statSync(cacheFile);
+      stale = Date.now() - st.mtimeMs > CACHE_FRESH_SECS * 1000;
+      if (!stale) { console.log('[tle-warm] cache is fresh — skipping pre-warm'); return; }
+    } catch (e) { /* no cache file yet */ }
+    const prefs = loadOsintPrefs();
+    const groups = (prefs.groups || 'starlink,oneweb,iridium-next,gps').split(',').map((s) => s.trim()).filter(Boolean).join(',');
+    console.log(`[tle-warm] TLE cache missing/stale — background refresh of [${groups}]…`);
+    const { execFile } = require('child_process');
+    const child = execFile('python3', ['jarv-satvision.py', '--positions', '--satellites', groups, '--json'], {
+      cwd: BACKEND_DIR, timeout: 180000, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, PYTHONUNBUFFERED: '1' },
+    }, (err, stdout) => {
+      if (err) { console.log('[tle-warm] failed:', String(err.message || err).slice(0, 300)); return; }
+      try {
+        const j = JSON.parse(stdout);
+        console.log(`[tle-warm] done — ${(j.positions || []).length} sats warmed (${groups})`);
+      } catch (e) { console.log('[tle-warm] done (unparsed output)'); }
+    });
+    child.on('error', (e) => console.log('[tle-warm] spawn error:', String(e).slice(0, 300)));
+    child.unref();
+  } catch (e) {
+    console.log('[tle-warm] skipped:', String((e && e.message) || e).slice(0, 300));
+  }
+}
+
 function detectTailscaleIp() {
   try {
     const out = require('child_process').execFileSync('tailscale', ['ip', '-4'], { timeout: 1500, encoding: 'utf8' });
@@ -1517,6 +1570,24 @@ server.listen(PORT, HOST, () => {
   if (tsIp) console.log(`Tailscale:  http://${tsIp}:${PORT}  (tailnet-only; JARV_GENIE_URL can point here or at your ts.net name)`);
   if (telegram) console.log('Telegram tunnel: enabled (long-poll, no inbound ports)');
   console.log(`[jarv] env: JARV_CHAT_LOCAL=${process.env.JARV_CHAT_LOCAL ?? '<unset>'} | autonomousShell=${process.env.JARV_AUTONOMOUS_SHELL ?? '<unset>'} | autonomousNet=${process.env.JARV_AUTONOMOUS_NET ?? '<unset>'} | autonomousWrite=${process.env.JARV_AUTONOMOUS_WRITE ?? '<unset>'}`);
+
+  // Empirical provider inventory: what the mesh can ACTUALLY reach right now,
+  // from its resolved key set — not from what .env.example promises.
+  void (async () => {
+    try {
+      const st = await ai.getStatus();
+      const keyed = (st.providers || []).filter((n) => n !== 'ollama-local' && n !== 'pollinations');
+      const live = Object.keys(st.providerHealth || {}).filter((n) => st.providerHealth[n] && st.providerHealth[n].ok);
+      console.log(`[mesh] enabled=${st.enabled} tier=${st.tier} chain=[${(st.providers || []).join(', ')}] live=[${live.join(', ')}] keyed=${keyed.length} last=${st.lastProviderUsed || 'none'}`);
+      if (!keyed.length && !st.enabled) console.log('[mesh] no usable provider chain — set OPENCODE_API_KEY, OPENROUTER_API_KEY, GROQ_API_KEY or another mesh key, or start Ollama locally.');
+    } catch (e) { console.log('[mesh] inventory unavailable:', String((e && e.message) || e)); }
+  })();
+
+  // Idle TLE pre-warm: when the on-disk TLE cache is missing or older than the
+  // refresh window, fetch the default OSINT groups in the background so the
+  // first God's Eye / quick-scan call is served from a warm cache. Non-blocking;
+  // failures are logged, never fatal.
+  warmTleCache();
 });
 
 function shutdown(signal) {

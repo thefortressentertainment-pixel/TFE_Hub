@@ -9,7 +9,7 @@
     "smoke:mesh": "node test/mesh-smoke.js",
     "smoke:ai": "node test/ai-bridge-smoke.js",
     "smoke:osint": "node test/osint-smoke.js",
-    "smoke": "node test/mesh-smoke.js && node test/ai-bridge-smoke.js && node test/osint-smoke.js && node test/telegram-tunnel-smoke.js",
+    "smoke": "node test/mesh-smoke.js && node test/ai-bridge-smoke.js && node test/osint-smoke.js && node test/settlement-smoke.js && node test/telegram-tunnel-smoke.js",
     "smoke:telegram": "node test/telegram-tunnel-smoke.js"
   },
   "dependencies": {

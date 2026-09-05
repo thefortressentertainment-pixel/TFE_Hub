@@ -1,0 +1,15 @@
+{
+  "updatedAt": "2026-09-05T02:22:38.552Z",
+  "agents": {
+    "core": {
+      "roi": 77,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T02:21:15.696Z"
+    },
+    "eyebot": {
+      "roi": 76,
+      "uses": 1,
+      "lastUsedAt": "2026-09-05T02:22:38.552Z"
+    }
+  }
+}

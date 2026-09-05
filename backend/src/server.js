@@ -136,6 +136,10 @@ const jarvAgent = require('./jarvAgent');
 const jarv = jarvAgent.makeJarvAgent({ pool, mesh, ai, log: console, locate: () => locService.locate() });
 mesh.setJarv(jarv);
 mesh.setLocation(locService);
+// Fortress Settlement — the Moltis-era 22-agent team (tiers + ROI), powered by
+// the hub mesh + JARV hands. Stage 1 of the Moltis re-frame (chat + dispatch);
+// deliberation/sessions/comm bridge come in later stages.
+const settlement = require('./settlement');
 // Telegram tunnel — outbound-only command channel (long-poll, zero inbound
 // ports) so JARV-Genie keeps an always-available path behind CGNAT/satellite.
 const telegramTunnel = require('./telegramTunnel');
@@ -1110,6 +1114,33 @@ app.get('/api/osint/globe', async (req, res) => {
     if (out && out.ok) persistOsintPrefs(filled);
     return res.json(out);
   } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ---- Fortress Settlement — Moltis-era agent team (roster + tiers + ROI) ----
+app.get('/api/settlement', (req, res) => res.json(settlement.team()));
+app.get('/api/settlement/team', (req, res) => res.json(settlement.team()));
+app.get('/api/settlement/roi', (req, res) => res.json(settlement.roiSummary()));
+
+app.post('/api/settlement/talk', async (req, res) => {
+  const agent = String((req.body || {}).agent || '');
+  const message = String((req.body || {}).message || '');
+  try {
+    const out = await settlement.talk(agent, message, {
+      chat: (messages) => ai.complete({ messages, max_tokens: 800 }),
+    });
+    return res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
+});
+
+app.post('/api/settlement/dispatch', async (req, res) => {
+  const agent = String((req.body || {}).agent || '');
+  const task = String((req.body || {}).task || '');
+  try {
+    const out = await settlement.dispatch(agent, task, {
+      ask: (messages, opts) => jarv.ask(messages, opts),
+    });
+    return res.status(out.ok ? 200 : 400).json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: String(e) }); }
 });
 
 // ---- JARV command-center chat (browser-facing, under regular auth) ----

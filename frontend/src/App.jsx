@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import GodsEyeView from './components/GodsEyeView'
+import SettlementView from './components/SettlementView'
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? 'https://tfe-hub.onrender.com').replace(/\/+$/, '')
 
@@ -1813,6 +1814,7 @@ export default function App() {
             </div>
           )}
         </div>
+        <SettlementView apiBase={API_BASE} />
         </>)}
       </div>
 

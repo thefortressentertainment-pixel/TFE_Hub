@@ -1017,6 +1017,35 @@ app.get('/api/comms/telegram', (req, res) => {
 
 // ---- OSINT for the app: JARV satellite-comms intelligence under regular auth ----
 const OSINT_SATVISION_PARAMS = ['lat', 'lon', 'alt', 'satellites', 'passes', 'min_el', 'overhead', 'footprint'];
+
+// ---- OSINT quick-query prefs: remember the operator's last scan params ----
+const OSINT_PREFS_FILE = path.resolve(__dirname, '..', 'data', 'osint-prefs.json');
+function loadOsintPrefs() {
+  try { return JSON.parse(fs.readFileSync(OSINT_PREFS_FILE, 'utf8')) || {}; } catch (e) { return {}; }
+}
+function saveOsintPrefs(prefs) {
+  try {
+    fs.mkdirSync(path.dirname(OSINT_PREFS_FILE), { recursive: true });
+    fs.writeFileSync(OSINT_PREFS_FILE, JSON.stringify(prefs, null, 2));
+  } catch (e) { /* non-fatal */ }
+}
+function applyOsintPrefs(args) {
+  const p = loadOsintPrefs();
+  const out = { ...args };
+  if (out.satellites == null || !String(out.satellites).trim()) out.satellites = p.groups || 'starlink,oneweb,iridium-next,gps';
+  if (out.passes == null && p.passes != null) out.passes = p.passes;
+  if (out.min_el == null && p.min_el != null) out.min_el = p.min_el;
+  return out;
+}
+function persistOsintPrefs(args) {
+  const p = loadOsintPrefs();
+  if (args.satellites) p.groups = String(args.satellites).replace(/\s+/g, '').split(',').filter(Boolean).slice(0, 12).join(',');
+  if (args.passes != null) p.passes = Number(args.passes);
+  if (args.min_el != null) p.min_el = Number(args.min_el);
+  p.lastScanAt = new Date().toISOString();
+  saveOsintPrefs(p);
+  return p;
+}
 app.use('/api/osint', (req, res, next) => {
   if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to use OSINT' });
   next();
@@ -1033,11 +1062,28 @@ app.get('/api/osint/policy', async (req, res) => {
     res.json(jarv.getPolicy ? jarv.getPolicy() : { error: 'policy unavailable' });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
+app.get('/api/osint/prefs', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to use OSINT' });
+  try { return res.json({ ok: true, prefs: loadOsintPrefs() }); }
+  catch (e) { res.status(500).json({ error: String(e) }); }
+});
+app.post('/api/osint/prefs', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate to use OSINT' });
+  try {
+    const patch = ((req.body || {}).prefs) || {};
+    const p = { ...loadOsintPrefs(), ...patch };
+    if (p.groups) p.groups = String(p.groups).replace(/\s+/g, '').split(',').filter(Boolean).slice(0, 12).join(',');
+    saveOsintPrefs(p);
+    return res.json({ ok: true, prefs: loadOsintPrefs() });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
 app.get('/api/osint/satvision', async (req, res) => {
   try {
     const args = {};
     for (const p of OSINT_SATVISION_PARAMS) if (req.query[p] !== undefined) args[p] = req.query[p];
-    const out = await jarv.executeTool('jarv_satvision', args);
+    const filled = applyOsintPrefs(args);
+    const out = await jarv.executeTool('jarv_satvision', filled);
+    if (out && out.ok) persistOsintPrefs(filled);
     return res.json(out);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -1046,7 +1092,9 @@ app.post('/api/osint/satvision', async (req, res) => {
     const body = (req.body || {});
     const args = {};
     for (const p of OSINT_SATVISION_PARAMS) if (body[p] !== undefined) args[p] = body[p];
-    const out = await jarv.executeTool('jarv_satvision', args);
+    const filled = applyOsintPrefs(args);
+    const out = await jarv.executeTool('jarv_satvision', filled);
+    if (out && out.ok) persistOsintPrefs(filled);
     return res.json(out);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -1055,8 +1103,11 @@ app.post('/api/osint/satvision', async (req, res) => {
 // subpoint (lat/lon/alt) for 3D globe rendering (Babylon).
 app.get('/api/osint/globe', async (req, res) => {
   try {
-    const groups = String(req.query.satellites || 'starlink,oneweb,iridium-next,gps').replace(/\s+/g, '');
-    const out = await jarv.executeTool('jarv_globe', { satellites: groups });
+    const defaultGroups = loadOsintPrefs().groups || 'starlink,oneweb,iridium-next,gps';
+    const groups = String(req.query.satellites || defaultGroups).replace(/\s+/g, '');
+    const filled = { satellites: groups };
+    const out = await jarv.executeTool('jarv_globe', filled);
+    if (out && out.ok) persistOsintPrefs(filled);
     return res.json(out);
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
@@ -1150,6 +1201,30 @@ function netAllowed(req, sess, once) {
   return !!(once || process.env.JARV_AUTONOMOUS_NET === '1' || sess.net);
 }
 
+// Casual-paced SSE reveal for the Code Forge. The agent work (tool calls, edits)
+// already finished server-side before this runs, so pacing the text is purely
+// cosmetic — it can't interrupt an edit mid-write. ~42 chars / 52ms keeps the
+// feel alive without hammering the event loop or the browser.
+function sendSse(res, obj) {
+  if (res.writableEnded || res.destroyed) return;
+  try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch (e) {}
+}
+function pumpSse(res, text) {
+  const CHUNK = 42;
+  const GAP = 52;
+  return new Promise((resolve) => {
+    let at = 0;
+    const step = () => {
+      if (res.writableEnded || res.destroyed) return resolve(true);
+      if (at >= text.length) return resolve(true);
+      sendSse(res, { type: 'chunk', text: text.slice(at, at + CHUNK) });
+      at += CHUNK;
+      setTimeout(step, GAP);
+    };
+    step();
+  });
+}
+
 app.get('/api/jarv/workspace', async (req, res) => {
   if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
   try {
@@ -1182,6 +1257,47 @@ app.post('/api/settings/autonomy', async (req, res) => {
     if (b.resetSession) jarvApprovals.delete(approvalKey(req));
     const sess = approvalSession(req);
     return res.json({ ok: true, autonomousShell: process.env.JARV_AUTONOMOUS_SHELL === '1', autonomousNet: process.env.JARV_AUTONOMOUS_NET === '1', sessionShell: sess.shell, sessionNet: sess.net });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+// ---- Mac permissions: verify JARV's hands are granted (TCC) ----
+// GET = quick status read; POST with {deep:true} also runs a screen-capture +
+// OCR sanity pass so the dashboard can prove the full see/click pipeline works.
+app.get('/api/jarv/permissions', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const out = await jarv.executeTool('jarv_run', { command: 'jarv-drive status' });
+    const text = (out && out.stdout) ? String(out.stdout) : ((out && out.error) ? `error: ${out.error}` : 'no output');
+    return res.json({
+      ok: true,
+      axTrusted: /\baxTrusted:\s*(true|yes|1)\b/i.test(text),
+      frontmost: ((text.match(/frontmost:\s*([^\s,)]+)/) || [])[1] || null),
+      screen: ((text.match(/main:\s*([^\s]+)/) || [])[1] || null),
+      raw: text.slice(0, 400),
+    });
+  } catch (e) { res.status(500).json({ error: String(e) }); }
+});
+
+app.post('/api/jarv/permissions', async (req, res) => {
+  if (!req.userId && !req.deviceId) return res.status(401).json({ error: 'authenticate first' });
+  try {
+    const statusOut = await jarv.executeTool('jarv_run', { command: 'jarv-drive status' });
+    const text = (statusOut && statusOut.stdout) ? String(statusOut.stdout) : '';
+    let ocr = { ok: false, rows: 0, sample: '' };
+    if ((req.body || {}).deep) {
+      const seeOut = await jarv.executeTool('jarv_run', { command: 'jarv-drive see' });
+      const seeRaw = (seeOut && seeOut.stdout) ? String(seeOut.stdout) : '';
+      const rows = seeRaw.split('\n').filter((l) => l.trim() && !/^(--?|\s*processing|picture saved|ocr digest)/i.test(l.trim()));
+      ocr = { ok: rows.length > 0, rows: rows.length, sample: rows.slice(0, 6).join(' · ').slice(0, 220), raw: seeRaw.slice(0, 600) };
+    }
+    return res.json({
+      ok: true,
+      axTrusted: /\baxTrusted:\s*(true|yes|1)\b/i.test(text),
+      frontmost: ((text.match(/frontmost:\s*([^\s,)]+)/) || [])[1] || null),
+      screen: ((text.match(/main:\s*([^\s]+)/) || [])[1] || null),
+      ocr,
+      raw: text.slice(0, 400),
+    });
   } catch (e) { res.status(500).json({ error: String(e) }); }
 });
 
@@ -1239,6 +1355,37 @@ app.post('/api/jarv/cli', async (req, res) => {
       allowShell: approvedShell,
       allowNet: approvedNet,
     });
+    if (body.stream === true) {
+      res.status(200);
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache, no-transform');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+      const blocked = out.blocked || [];
+      sendSse(res, { type: 'start' });
+      if (blocked.length && !once && !session.tools.size && !approvedShell) {
+        sendSse(res, {
+          type: 'approval',
+          reply: out.reply || '',
+          needsApproval: blocked.map((b) => ({ name: b.name, args: b.args, reason: b.reason })),
+        });
+        try { res.end(); } catch (e) {}
+        return;
+      }
+      await pumpSse(res, String(out.reply || ''));
+      sendSse(res, {
+        type: 'done',
+        ok: out.ok,
+        provider: out.provider,
+        model: out.model,
+        turns: out.turns,
+        toolCalls: (out.toolCalls || []).map((t) => ({ name: t.name, args: t.args })),
+        blocked,
+        error: out.error,
+      });
+      try { res.end(); } catch (e) {}
+      return;
+    }
     const blocked = out.blocked || [];
     if (blocked.length && !once && !session.tools.size && !approvedShell) {
       return res.json({

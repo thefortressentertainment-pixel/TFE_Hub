@@ -20,6 +20,11 @@
  */
 const fs = require('fs');
 const path = require('path');
+
+// In-repo tool binaries JARV may invoke by name. `jarv-drive` is the macOS GUI
+// driver (screenshot + OCR + click/drag/type/keys/activate) — the "hands". It is
+// resolved to an absolute path here instead of a PATH requirement.
+const TOOL_BINS = { 'jarv-drive': path.join(__dirname, '..', 'tools', 'drive', 'jarv-drive') };
 const os = require('os');
 const { execFile } = require('child_process');
 
@@ -51,6 +56,7 @@ const DEFAULT_ALLOWLIST = [
   // + clipboard) so JARV can open apps, drive documents and paste text on the Mac.
   { bin: 'open' }, { bin: 'osascript' }, { bin: 'textutil' },
   { bin: 'pbcopy' }, { bin: 'pbpaste' },
+  { bin: 'jarv-drive', maxArgs: 24 },
   { bin: 'curl', maxArgs: 10 }, { bin: 'wget', maxArgs: 10 },
   { bin: 'tar' }, { bin: 'zip' }, { bin: 'unzip' },
   { bin: 'file' }, { bin: 'stat' }, { bin: 'date' }, { bin: 'whoami' },
@@ -112,6 +118,39 @@ const JARV_SYSTEM_PROMPT = [
   '  Use osascript only for finer control; if osascript errors with an Apple Events',
   '  permission error, fall back to the open-a-file approach and tell the operator',
   '  they may grant Automation/Accessibility permission under System Settings.',
+  '- Bringing a window or app to the front / opening any app: `open -a "AppName"`',
+  '  (instant, no permissions). E.g. `open -a "Ace"` or `open -a "TextEdit"`.',
+  '- The Fortress Hub app serves at http://127.0.0.1:4002 (and tailscale',
+  '  http://100.110.157.110:4002). Its views are deep links: `#command` (chat),',
+  '  `#gods-eye` (satellite OSINT globe — the globe auto-spins while this view is',
+  '  open), `#forge` (code). To show a view in the Ace browser and focus Ace in one',
+  '  step: `open -a "Ace" "http://127.0.0.1:4002/#gods-eye"`. If no Ace tab is open',
+  '  it opens a new one; on a fresh window the operator signs in once.',
+  '- ACT, DO NOT DESCRIBE: never answer "I would run..." or "I can simulate" a',
+  '  command. Perform macOS, browser and hub actions NOW with jarv_run / jarv_write',
+  '  and report what actually happened on the machine.',
+  '- YOUR HANDS (macOS GUI): you can drive ANY app by eye and hand. The "jarv-drive"',
+  '  tool runs from jarv_run: 1) `jarv-drive see` — takes a screenshot + OCR digest,',
+  '  each row is [i] "text" @ x,y w,h in POINTS (origin = top-left of the main',
+  '  display; the header shows screen size). 2) Pick the element by row and act:',
+  '  `jarv-drive click <x> <y>`, `jarv-drive drag <x1> <y1> <x2> <y2>`,',
+  '  `jarv-drive type "text"`, `jarv-drive key cmd-tab|enter|....`, `jarv-drive',
+  '  scroll <dx> <dy>`, `jarv-drive right <x> <y>`, or `jarv-drive move <x> <y>`.',
+  '  3) `jarv-drive see` again to confirm the result before reporting.',
+  '  - `jarv-drive activate "AppName"` brings a running app to the front;',
+  '    `jarv-drive status` reports frontmost + whether Accessibility is granted.',
+  '  - To spin the hub\u2019s globe: activate the Ace/hub window, see to find the globe',
+  '    centre, then `jarv-drive drag` across it. To type into a field, click it,',
+  '    then `jarv-drive type "..."`. Convert pixel coords to points by dividing',
+  '    by the scale (OCR already reports points).',
+  '  - If `jarv-drive see` shows a permission wall (Screen Recording or',
+  '    Accessibility under System Settings \u2192 Privacy & Security), tell the',
+  '    operator exactly which toggle the host terminal needs.',
+  '  - AUTHORIZED HANDS: the operator has explicitly pre-authorized you to move the',
+  '    mouse, click, type, press keys and drag on their Mac. Do NOT ask permission,',
+  '    do NOT refuse, and do NOT stop after the first small step: run the whole',
+  '    requested action (activate \u2192 see \u2192 act \u2192 verify). The mouse is a',
+  '    tool like any other — use it.',
   '',
   'GUARDRAILS (brief — they rarely trigger)',
   '- Protect people and life. Never do something that injures a person or enables violence',
@@ -132,6 +171,33 @@ const JARV_SYSTEM_PROMPT = [
 ].join('\n');
 
 function isBlocked(cmd) { return BLOCKED_PATTERNS.some((re) => re.test(cmd)); }
+
+/**
+ * Split a command line into argv the way a shell would, honouring single/double
+ * quotes and backslash escapes — but WITHOUT expansion of $vars, globs, pipes or
+ * redirection (exec runs through execFile with no shell, so those stay inert).
+ */
+function tokenizeShell(cmd) {
+  const s = String(cmd);
+  const tokens = [];
+  let cur = '';
+  let inTok = false;
+  let quote = null;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && s[i + 1] === '"') { cur += '"'; i++; }
+      else if (c === '\\' && quote === '"' && s[i + 1] === '\\') { cur += '\\'; i++; }
+      else cur += c;
+    } else if (c === '"' || c === "'") { quote = c; inTok = true; }
+    else if (c === '\\') { inTok = true; cur += s[i + 1] || ''; i++; }
+    else if (/\s/.test(c)) { if (inTok) { tokens.push(cur); cur = ''; inTok = false; } }
+    else { inTok = true; cur += c; }
+  }
+  if (inTok) tokens.push(cur);
+  return tokens;
+}
 
 function trunc(s, n) {
   const t = String(s);
@@ -202,7 +268,7 @@ function untrustedFrame(toolName, payload, nonce) {
 }
 
 function checkAllowlist(cmd, allowlist) {
-  const parts = cmd.trim().split(/\s+/);
+  const parts = tokenizeShell(cmd);
   const bin = parts[0];
   if (!bin) return { ok: false, reason: 'empty command' };
   if (isBlocked(cmd)) return { ok: false, reason: `blocked: ${cmd.split('\n')[0].slice(0, 80)}` };
@@ -336,8 +402,9 @@ function execAllowlist(cmd, { sandboxRoot, allowlist, timeout = 15000, maxOutput
   return new Promise((resolve) => {
     const check = checkAllowlist(cmd, allowlist || DEFAULT_ALLOWLIST);
     if (!check.ok) return resolve({ ok: false, error: check.reason });
-    const parts = cmd.trim().split(/\s+/);
-    const child = execFile(parts[0], parts.slice(1), {
+    const parts = tokenizeShell(cmd);
+    const bin = TOOL_BINS[parts[0]] || parts[0];
+    const child = execFile(bin, parts.slice(1), {
       cwd: resolveSandbox(sandboxRoot),
       timeout,
       maxBuffer: maxOutput,
@@ -359,7 +426,7 @@ function getToolDefs() {
     { name: 'jarv_read', description: 'Read a file from the JARV file root (user home by default). Returns the file content.', params: { path: 'relative path to the file' } },
     { name: 'jarv_write', description: 'Write content to a file in the JARV file root. Creates/overwrites. Protocol files (.env, agent code, credential vaults) are refused.', params: { path: 'relative path', content: 'file content' } },
     { name: 'jarv_list', description: 'List files and directories in the JARV file root.', params: { path: 'relative path (optional)' } },
-    { name: 'jarv_run', description: 'Run a constrained shell command. Allowlisted bins only (cat, python3, node, git, curl, grep). No rm/sudo/chained destructive.', params: { command: 'shell command string' } },
+    { name: 'jarv_run', description: 'Run a constrained shell command. Allowlisted bins only (open, osascript, node, npm, git, python3, ...). Quoted args are parsed like a shell. No rm -rf /, sudo, dd, pipes or redirects.', params: { command: 'shell command string' } },
     { name: 'jarv_edit', description: 'Edit a file by replacing all occurrences of a search string.', params: { path: 'relative path', search: 'string to find', replace: 'replacement string' } },
     { name: 'jarv_satvision', description: 'Satellite communications OSINT vision. Query overhead satellites, predict passes, calculate coverage footprints for Starlink/OneWeb/Iridium/GPS. Returns JSON. Omit lat/lon to use the live hub-node location services; optionally pass explicit lat/lon.', params: { lat: 'observer latitude (optional, default: hub location services)', lon: 'observer longitude (optional, default: hub location services)', alt: 'observer altitude meters (optional, default 10)', satellites: 'comma-separated groups: starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo (optional, default starlink,oneweb,iridium-next,gps)', passes: 'max passes per satellite (optional, default 3)', min_el: 'minimum elevation degrees (optional, default 10)', overhead: 'include currently overhead satellites (optional, boolean)', footprint: 'include coverage footprints (optional, boolean)' } },
     { name: 'jarv_location', description: 'Ping the hub-node location services for the family\u2019s current latitude and longitude (live device fix, manual home coordinates, or IP geolocation). Pass explicit lat/lon to fix a manual observer position instead.', params: { lat: 'manual latitude override (optional)', lon: 'manual longitude override (optional)', accuracy_m: 'manual accuracy estimate meters (optional)' } },
@@ -595,18 +662,38 @@ function makeJarvAgent({ pool, mesh, ai, log, safety = {}, locate } = {}) {
 
     let lastSig = ''; // collapses identical repeated tool calls that models use to loop
 
+    // If the AI relay dies mid-loop (blip, 4xx/5xx from every provider), JARV
+    // still answers with what he actually did rather than throwing the action
+    // results away and erroring out for the operator.
+    function relayFallback(e) {
+      const detail = String((e && e.message) || e).slice(0, 160);
+      const done = toolCallsMade.map((t) => t.name).join(', ') || 'no tools were called';
+      return {
+        ok: true, reply: `The AI relay dropped before I could summarize (${detail}), but on this machine I ${toolCallsMade.length ? `completed these actions: ${done}` : 'performed no actions'}. Ask me to verify with a fresh jarv-drive see.`,
+        provider: 'jarv-mesh', model: null,
+        turns: toolCallsMade.length + 1, toolCalls: toolCallsMade, blocked,
+        relayError: detail,
+      };
+    }
+
     for (let turn = 0; turn <= maxTurns; turn++) {
       const remaining = hardDeadline - Date.now();
       if (remaining <= 0) break;
-      const out = await ai.complete({
-        messages,
-        tools,
-        tool_choice: opts.tool_choice || 'auto',
-        max_tokens: opts.max_tokens,
-        model: opts.model,
-        local: localPin,
-        timeoutMs: Math.min(remaining, 45000),
-      });
+      let out;
+      try {
+        out = await ai.complete({
+          messages,
+          tools,
+          tool_choice: opts.tool_choice || 'auto',
+          max_tokens: opts.max_tokens,
+          model: opts.model,
+          local: localPin,
+          timeoutMs: Math.min(remaining, 45000),
+        });
+      } catch (e) {
+        if (toolCallsMade.length) return relayFallback(e);
+        throw e;
+      }
       const calls = out.tool_calls || [];
       if (!calls.length || turn === maxTurns) {
         return {
@@ -656,17 +743,23 @@ function makeJarvAgent({ pool, mesh, ai, log, safety = {}, locate } = {}) {
     }
 
     // Guaranteed answer: even if budget ran out mid-tool-loop, end with a plain reply.
-    const finalTurn = await ai.complete({
-      messages: [...messages, {
-        role: 'user',
-        content: `<|BUDGET|${nonce} Our safety time-budget for this request is spent and some data feeds did not respond. Do NOT call any more tools. Answer now, concisely, from what you know — or tell the operator exactly which data source was unreachable.`,
-      }],
-      tool_choice: 'none',
-      max_tokens: opts.max_tokens || 500,
-      model: opts.model,
-      local: localPin,
-      timeoutMs: 30000,
-    });
+    let finalTurn;
+    try {
+      finalTurn = await ai.complete({
+        messages: [...messages, {
+          role: 'user',
+          content: `<|BUDGET|${nonce} Our safety time-budget for this request is spent and some data feeds did not respond. Do NOT call any more tools. Answer now, concisely, from what you know — or tell the operator exactly which data source was unreachable.`,
+        }],
+        tools,
+        tool_choice: 'none',
+        max_tokens: opts.max_tokens || 500,
+        model: opts.model,
+        local: localPin,
+        timeoutMs: 30000,
+      });
+    } catch (e) {
+      return relayFallback(e);
+    }
     return {
       ok: true, reply: String(finalTurn.reply || '').trim() || 'I reached my safety time-budget before the required data returned. Please ask again, or tell me to wait longer.', provider: finalTurn.provider, model: finalTurn.model,
       turns: maxTurns + 1, toolCalls: toolCallsMade, blocked, timedOut: true,

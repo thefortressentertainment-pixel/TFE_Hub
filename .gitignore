@@ -19,3 +19,6 @@ __pycache__/
 *.pyc
 backend/jarv-sandbox/
 jarv-data/
+backend/tools/drive/bin/
+backend/tools/drive/*.png
+backend/tools/drive/*.json

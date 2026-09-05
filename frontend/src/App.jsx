@@ -5,6 +5,31 @@ const API_BASE = (import.meta.env.VITE_API_BASE ?? 'https://tfe-hub.onrender.com
 
 const DEFAULT_GROUPS = 'starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo,iss'
 
+// Stream reader for the Code Forge SSE responses (POST + fetch reader; the
+// server paces chunks casually so the reveal feels live without racing).
+async function readSse(resp, onEvent) {
+  const ct = resp.headers.get('content-type') || ''
+  if (!ct.includes('text/event-stream')) return false
+  const reader = resp.body.getReader()
+  const dec = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += dec.decode(value, { stream: true })
+    let i
+    while ((i = buf.indexOf('\n\n')) !== -1) {
+      const evt = buf.slice(0, i); buf = buf.slice(i + 2)
+      for (const ln of evt.split('\n')) {
+        if (ln.startsWith('data: ')) {
+          try { onEvent(JSON.parse(ln.slice(6))) } catch { /* skip malformed frame */ }
+        }
+      }
+    }
+  }
+  return true
+}
+
 function getDeviceId() {
   let id = localStorage.getItem('fortress_device_id')
   if (!id) {
@@ -105,7 +130,18 @@ export default function App() {
   }
 
   const [showSettings, setShowSettings] = useState(false)
-  const [view, setView] = useState('command')
+  // Deep links: the URL fragment names a view (defaults to Command Core). JARV and
+  // the docks open the hub with e.g. /#gods-eye to land on the God's Eye globe.
+  const viewFromHash = () => {
+    const h = (typeof window !== 'undefined' ? window.location.hash : '#').replace(/^#\/?/, '').toLowerCase()
+    return VIEWS.some((v) => v.id === h) ? h : 'command'
+  }
+  const [view, setView] = useState(viewFromHash)
+  useEffect(() => {
+    const onHash = () => setView(viewFromHash())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [])
   const [theme, setTheme] = useState(() => localStorage.getItem('fortress_theme') || 'light')
   const [comms, setComms] = useState(null)
   const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true)
@@ -131,6 +167,7 @@ export default function App() {
   const [globePositions, setGlobePositions] = useState([])
   const [globeLoading, setGlobeLoading] = useState(false)
   const [globeError, setGlobeError] = useState('')
+  const [selectedSatellite, setSelectedSatellite] = useState(null)
 
   const [chatMsgs, setChatMsgs] = useState([])
   const [chatInput, setChatInput] = useState('')
@@ -143,15 +180,31 @@ export default function App() {
   const [cliLines, setCliLines] = useState([])
   const [cliInput, setCliInput] = useState('')
   const [cliBusy, setCliBusy] = useState(false)
+  const [liveCli, setLiveCli] = useState('')
+  const cliAcc = useRef('')
   const cliEndRef = useRef(null)
-  useEffect(() => { if (cliEndRef.current) cliEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [cliLines, cliBusy])
+  useEffect(() => { if (cliEndRef.current) cliEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [cliLines, cliBusy, liveCli])
   const [cliApprove, setCliApprove] = useState(false)
   const [forgeTab, setForgeTab] = useState('vibe')
   const [vibeInput, setVibeInput] = useState('')
   const [vibeBusy, setVibeBusy] = useState(false)
   const [vibeLines, setVibeLines] = useState([])
+  const [liveVibe, setLiveVibe] = useState('')
+  const vibeAcc = useRef('')
   const vibeEndRef = useRef(null)
-  useEffect(() => { if (vibeEndRef.current) vibeEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [vibeLines, vibeBusy])
+  useEffect(() => { if (vibeEndRef.current) vibeEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' }) }, [vibeLines, vibeBusy, liveVibe])
+
+  // ---- Mac permissions (TCC) card ----
+  const [perm, setPerm] = useState(null)
+  const [permBusy, setPermBusy] = useState(false)
+
+  // ---- OSINT quick-query prefs ----
+  const [osintPrefs, setOsintPrefs] = useState(null)
+  const [scanGroups, setScanGroups] = useState(DEFAULT_GROUPS)
+  const [scanMinEl, setScanMinEl] = useState(10)
+  const [scanPasses, setScanPasses] = useState(3)
+  const [scanBusy, setScanBusy] = useState(false)
+  const [scanResult, setScanResult] = useState(null)
 
   const [tree, setTree] = useState([])
   const [treeLoading, setTreeLoading] = useState(false)
@@ -198,12 +251,33 @@ export default function App() {
     if (!line || cliBusy) return
     if (!approve) { pushCli('in', promptLine(line)); setCliInput('') }
     setCliBusy(true)
+    cliAcc.current = ''
+    const handleStream = (j) => {
+      if (j.type === 'chunk') { cliAcc.current += j.text; setLiveCli(cliAcc.current) }
+      else if (j.type === 'approval') {
+        cliAcc.current = ''; setLiveCli('')
+        setCliPending({ command: line, needsApproval: j.needsApproval || [] })
+        pushCli('out', `JARV wants to ${(j.needsApproval || []).map(t => t.name.replace('jarv_', '')).join(' + ')} — choose approval below.`)
+        if (j.reply) pushCli('out', `   ${j.reply.slice(0, 300)}`)
+      } else if (j.type === 'done') {
+        const full = cliAcc.current; cliAcc.current = ''; setLiveCli('')
+        if (j.ok) {
+          pushCli('out', `[${j.provider || 'jarv'}]${j.model ? ` (${j.model})` : ''}: ${full}${j.toolCalls && j.toolCalls.length ? `\n   ↳ tools: ${j.toolCalls.map(t => t.name + (t.args && Object.keys(t.args).length ? ' ' + JSON.stringify(t.args) : '')).join(', ')}` : ''}`)
+          if (j.turns) pushCli('out', `   ↳ ${j.turns} turn${j.turns > 1 ? 's' : ''}`)
+          if ((j.toolCalls || []).some(t => t.name === 'jarv_write')) loadTree()
+        } else {
+          pushCli('err', `⛔ ${j.error || 'no reply'}`)
+        }
+      } else if (j.type === 'error') { cliAcc.current = ''; setLiveCli(''); pushCli('err', `⛔ ${j.message || 'stream failed'}`) }
+    }
     try {
       const r = await fetch(`${API_BASE}/api/jarv/cli`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(approve ? { command: line, approval: approve } : { command: line, unlock: cliApprove }),
+        body: JSON.stringify(approve ? { command: line, approval: approve, stream: true } : { command: line, unlock: cliApprove, stream: true }),
       })
+      const usedStream = await readSse(r, handleStream)
+      if (usedStream) { setCliBusy(false); return }
       const j = await r.json()
       if (j.needsApproval && j.needsApproval.length && !approve) {
         setCliPending({ command: line, needsApproval: j.needsApproval })
@@ -242,13 +316,42 @@ export default function App() {
     if (!ask || vibeBusy) return
     if (!approve) { pushVibe('in', ask); setVibeInput('') }
     setVibeBusy(true)
+    vibeAcc.current = ''
     pushVibe('out', approve ? '…re-running with your approval…' : '…JARV is shaping that into workspace scripts…')
+    const handleStream = (j) => {
+      if (j.type === 'start') { setVibeLines(prev => prev.filter(l => !l.text.startsWith('…'))) }
+      else if (j.type === 'chunk') { vibeAcc.current += j.text; setLiveVibe(vibeAcc.current) }
+      else if (j.type === 'approval') {
+        vibeAcc.current = ''; setLiveVibe('')
+        setVibePending({ command: ask, needsApproval: j.needsApproval || [] })
+        pushVibe('out', `JARV wants to ${(j.needsApproval || []).map(t => t.name.replace('jarv_', '')).join(' + ')}`)
+        if (j.reply) pushVibe('code', j.reply.slice(0, 400))
+      } else if (j.type === 'done') {
+        const full = vibeAcc.current; vibeAcc.current = ''; setLiveVibe('')
+        if (j.ok) {
+          pushVibe('out', `[${j.provider || 'jarv'}${j.model ? ` · ${j.model}` : ''}${j.turns ? ` · ${j.turns} turn${j.turns > 1 ? 's' : ''}` : ''}]`)
+          pushVibe('code', full || '(no reply)')
+          if (j.toolCalls && j.toolCalls.length) {
+            pushVibe('out', `↳ tools used: ${j.toolCalls.map(t => t.name).join(', ')}`)
+            const written = j.toolCalls.find(t => t.name === 'jarv_write')
+            if (written && written.args && written.args.path) {
+              pushVibe('out', `↳ wrote ${written.args.path} — open it in the IDE tab.`)
+              loadTree()
+            }
+          }
+        } else {
+          pushVibe('err', `⛔ ${j.error || 'no reply'}`)
+        }
+      } else if (j.type === 'error') { vibeAcc.current = ''; setLiveVibe(''); pushVibe('err', `⛔ ${j.message || 'stream failed'}`) }
+    }
     try {
       const r = await fetch(`${API_BASE}/api/jarv/cli`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(approve ? { command: ask, approval: approve } : { command: ask }),
+        body: JSON.stringify(approve ? { command: ask, approval: approve, stream: true } : { command: ask, stream: true }),
       })
+      const usedStream = await readSse(r, handleStream)
+      if (usedStream) { setVibeBusy(false); return }
       const j = await r.json()
       const stain = approve ? '…re-running with your approval…' : '…JARV is shaping that into workspace scripts…'
       setVibeLines(prev => prev.filter(l => l.text !== stain))
@@ -478,6 +581,20 @@ export default function App() {
     setKeysBusy(false)
   }
 
+  // ---- Mac permissions (TCC): verify JARV's hands are granted ----
+  const checkPermissions = async (deep) => {
+    if (!user) return
+    setPermBusy(true)
+    try {
+      const opts = deep ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ deep: true }) } : undefined
+      const r = await fetch(`${API_BASE}/api/jarv/permissions`, opts)
+      const j = await r.json()
+      setPerm(j.ok ? j : { ok: false, axTrusted: false, ocr: { ok: false }, error: j.error || ('HTTP ' + r.status) })
+    } catch (e) { setPerm({ ok: false, axTrusted: false, ocr: { ok: false }, error: String(e) }) }
+    setPermBusy(false)
+  }
+  useEffect(() => { if (user) checkPermissions(false) }, [user])
+
   // ---- JARV workspace + autonomy ----
   const loadWorkspace = async () => {
     if (!user) return
@@ -587,7 +704,8 @@ export default function App() {
     const ctrl = new AbortController()
     const to = setTimeout(() => ctrl.abort(), 20000)
     try {
-      const r = await fetch(`${API_BASE}/api/osint/globe?satellites=${DEFAULT_GROUPS}`, { signal: ctrl.signal })
+      const groups = (osintPrefs && osintPrefs.groups) || DEFAULT_GROUPS
+      const r = await fetch(`${API_BASE}/api/osint/globe?satellites=${encodeURIComponent(groups)}`, { signal: ctrl.signal })
       const j = await r.json()
       if (j.ok && Array.isArray(j.positions)) {
         setGlobePositions(j.positions)
@@ -602,10 +720,54 @@ export default function App() {
     }
   }
 
+  // ---- OSINT quick-query: remember last scan params + one-tap sky scan ----
+  const loadOsintPrefsState = async () => {
+    try {
+      const r = await fetch(`${API_BASE}/api/osint/prefs`)
+      const j = await r.json()
+      if (j.ok && j.prefs) {
+        setOsintPrefs(j.prefs)
+        if (j.prefs.groups) setScanGroups(j.prefs.groups)
+        if (j.prefs.min_el != null) setScanMinEl(Number(j.prefs.min_el))
+        if (j.prefs.passes != null) setScanPasses(Number(j.prefs.passes))
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  const runQuickScan = async () => {
+    if (scanBusy) return
+    setScanBusy(true)
+    setScanResult(null)
+    try {
+      const r = await fetch(`${API_BASE}/api/osint/satvision`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ satellites: scanGroups, min_el: scanMinEl, passes: scanPasses }),
+      })
+      const j = await r.json()
+      let passes = null
+      let at = null
+      if (j.ok) {
+        if (Array.isArray(j.passes)) { passes = j.passes; at = j.at || null }
+        else if (j.stdout) {
+          try { const data = JSON.parse(j.stdout); passes = Array.isArray(data.passes) ? data.passes : null; at = data.timestamp || null } catch { /* ignore */ }
+        }
+      }
+      if (passes) {
+        setScanResult({ passes: passes.slice(0, 12), at, groups: scanGroups })
+        setOsintPrefs({ groups: scanGroups, min_el: scanMinEl, passes: scanPasses })
+      } else {
+        setGlobeError((j && j.error) || 'sky scan returned no passes')
+      }
+    } catch (e) { setGlobeError(`sky scan: ${String(e)}`) }
+    setScanBusy(false)
+  }
+
   useEffect(() => {
     if (!user) return
     loadHubLocation()
     loadGlobe()
+    loadOsintPrefsState()
     const t = setInterval(loadGlobe, 60000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -985,7 +1147,15 @@ export default function App() {
               </svg>
             </div>
             <h1>Fortress Hub</h1>
-            <div className="auth-sub">{resetToken ? 'Set a new password' : authMode === 'login' ? 'Welcome back — family grid & field intel' : 'Create the family vault — your data, private to you'}</div>
+            <div className="auth-sub">
+              {resetToken
+                ? 'Set a new password'
+                : viewFromHash() === 'gods-eye'
+                  ? 'God\u2019s Eye requested \u2014 sign in once, and the satellite globe will spin right here.'
+                  : authMode === 'login'
+                    ? 'Welcome back \u2014 family grid & field intel'
+                    : 'Create the family vault \u2014 your data, private to you'}
+            </div>
             {authError && <div className="auth-error">{authError}</div>}
             <label>Email</label>
             <input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="you@example.com" autoComplete="email" />
@@ -1084,6 +1254,43 @@ export default function App() {
               <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0 14px', paddingTop: 14 }}>
                 <div className="flex-between" style={{ marginBottom: 6 }}>
                   <div>
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>Mac permissions — JARV's hands</div>
+                    <div className="muted">Accessibility + Screen Recording must be granted to the process hosting JARV, or the drive/click toolkit can't reach the screen. Only a human can flip these in System Settings; the buttons below open the right pane.</div>
+                  </div>
+                  <div className="flex" style={{ gap: 6 }}>
+                    <button className="btn-sm" onClick={() => checkPermissions(false)} disabled={permBusy}>{permBusy ? '…' : 'Verify'}</button>
+                    <button className="btn-sm" onClick={() => checkPermissions(true)} disabled={permBusy}>{permBusy ? '…' : 'Verify + OCR test'}</button>
+                  </div>
+                </div>
+
+                {perm && (
+                  <div className="flex" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                    <span className={`link-chip`} style={{ fontSize: 11 }}>
+                      <span className={`link-dot ${perm.axTrusted ? 'green' : 'gray'}`} style={{ display: 'inline-block' }} />
+                      Accessibility {perm.axTrusted ? 'granted' : 'missing'}
+                    </span>
+                    {perm.screen && <span className="link-chip" style={{ fontSize: 11 }}>screen: {perm.screen}</span>}
+                    {perm.frontmost && <span className="link-chip" style={{ fontSize: 11 }}>frontmost: {perm.frontmost}</span>}
+                    {perm.ocr && (
+                      <span className="link-chip" style={{ fontSize: 11 }}>
+                        <span className={`link-dot ${perm.ocr.ok ? 'green' : 'gray'}`} style={{ display: 'inline-block' }} />
+                        Screen capture + OCR {perm.ocr.ok ? 'ok' : 'not verified'}{perm.ocr.rows ? ` · ${perm.ocr.rows} line${perm.ocr.rows > 1 ? 's' : ''} read` : ''}
+                      </span>
+                    )}
+                    {perm.error && <span className="muted" style={{ fontSize: 11 }}>⚠ {perm.error}</span>}
+                  </div>
+                )}
+                {perm && perm.ocr && perm.ocr.sample && <div className="muted" style={{ fontSize: 11, marginBottom: 8, fontStyle: 'italic' }}>OCR picked up: “{perm.ocr.sample}”</div>}
+
+                <div className="flex" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <a className="btn-sm" target="_blank" rel="noreferrer" href="x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility">Open Accessibility pane</a>
+                  <a className="btn-sm" target="_blank" rel="noreferrer" href="x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture">Open Screen Recording pane</a>
+                </div>
+              </div>
+
+              <div style={{ borderTop: '1px solid var(--border)', margin: '6px 0 14px', paddingTop: 14 }}>
+                <div className="flex-between" style={{ marginBottom: 6 }}>
+                  <div>
                     <div style={{ fontWeight: 600, fontSize: 14 }}>Cloud API keys</div>
                     <div className="muted">JARV falls back across these keyed providers when local Ollama is unavailable. Keys are stored in <code>{KEYS_DEST}</code> and activate immediately. Leave a field blank to keep its current value; enter a blank "spacer" to clear.</div>
                   </div>
@@ -1175,7 +1382,7 @@ export default function App() {
 
         <div className="galactic-nav" role="tablist" aria-label="Fortress Hub command center">
           {VIEWS.map(v => (
-            <button key={v.id} role="tab" aria-selected={view === v.id} className="nav-seg" data-on={view === v.id} onClick={() => setView(v.id)}>
+            <button key={v.id} role="tab" aria-selected={view === v.id} className="nav-seg" data-on={view === v.id} onClick={() => { setView(v.id); if (String(window.location.hash).replace(/^#\/?/, '') !== v.id) window.location.hash = v.id }}>
               <span className="nav-orb">{v.icon === '◍' ? '' : v.icon}</span>
               <span>{v.label}</span>
               <span className={`nav-dot ${v.id === 'command' || v.id === 'forge' ? 'on' : (comms && comms.ai ? 'on' : 'off')}`} style={{ display: 'none' }} />
@@ -1351,6 +1558,7 @@ export default function App() {
                     </div>
                   )}
                   {cliLines.map((l, i) => <div key={i} className={`cli-line ${l.kind}`}>{l.text}</div>)}
+                  {liveCli && <div className="cli-line out" style={{ whiteSpace: 'pre-wrap' }}>{liveCli}</div>}
                   {cliBusy && <div className="cli-line out" style={{ color: '#8b949e' }}>running…</div>}
                   <div ref={cliEndRef} />
                 </div>
@@ -1479,6 +1687,7 @@ export default function App() {
                   <div className="vibe-log">
                     <div className="vibe-body">
                       {vibeLines.map((l, i) => <div key={i} className={`vibe-line ${l.kind}`}>{l.text}</div>)}
+                      {liveVibe && <div className="vibe-line code" style={{ whiteSpace: 'pre-wrap' }}>{liveVibe}</div>}
                       {vibeBusy && <div className="vibe-line out" style={{ color: '#8b949e' }}>…</div>}
                       <div ref={vibeEndRef} />
                     </div>
@@ -1546,10 +1755,63 @@ export default function App() {
             <button className="btn-sm" onClick={loadGlobe} disabled={globeLoading}>{globeLoading ? 'Projecting…' : 'Refresh Grid'}</button>
           </div>
           <div className="muted" style={{ fontSize: 12, padding: '4px 16px 8px' }}>
-            Photorealistic 3D globe — live satellites from CelesTrak (OrbitDeck), color-coded by constellation.
+            Photorealistic 3D globe — live satellites from CelesTrak (OrbitDeck), color-coded by constellation. Click a dot to inspect it, then <strong>Focus ◉</strong> to center the camera.
           </div>
-          <GodsEyeView positions={globePositions} hubLocation={hubLocation} theme={theme} />
-          {globeError && <div className="status-box" style={{ margin: 10, fontSize: 12 }}>Globe: {globeError}</div>}
+          <div className="flex" style={{ gap: 8, alignItems: 'center', padding: '0 16px 10px', flexWrap: 'wrap' }}>
+            <span className="muted" style={{ fontSize: 11 }}>Quick sky scan:</span>
+            <select value={scanGroups} onChange={e => setScanGroups(e.target.value)} style={{ maxWidth: 340, fontSize: 12 }} title="Satellite groups (comma-separated)">
+              <option value="starlink,oneweb,iridium-next,gps">Starlink · OneWeb · Iridium · GPS</option>
+              <option value="starlink,oneweb,iridium-next,gps,galileo,glonass,beidou,geo,iss">starlink, oneweb, iridium-next, gps, galileo, glonass, beidou, geo, iss</option>
+              <option value="starlink">Starlink only</option>
+              <option value="gps">GPS only</option>
+              <option value="iss,geo">ISS + GEO</option>
+            </select>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+              min el
+              <input type="range" min="0" max="80" step="1" value={scanMinEl} onChange={e => setScanMinEl(Number(e.target.value))} style={{ width: 90 }} />
+              <b>{scanMinEl}°</b>
+            </label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+              passes
+              <input type="range" min="1" max="5" step="1" value={scanPasses} onChange={e => setScanPasses(Number(e.target.value))} style={{ width: 70 }} />
+              <b>{scanPasses}</b>
+            </label>
+            <button className="btn-sm btn-primary" onClick={runQuickScan} disabled={scanBusy}>{scanBusy ? 'Scanning…' : 'Scan'}</button>
+          </div>
+          <GodsEyeView positions={globePositions} hubLocation={hubLocation} theme={theme} onSelect={setSelectedSatellite} />
+          {globeError && <div className="status-box" style={{ margin: 10, fontSize: 12, borderRadius: 8 }}>Globe: {globeError}</div>}
+          {scanResult && (
+            <div style={{ padding: '0 16px 14px', maxHeight: 200, overflowY: 'auto' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 6 }}>Next passes — {scanResult.groups}</div>
+              {scanResult.passes.slice(0, 8).map((p, i) => (
+                <div key={i} className="flex" style={{ gap: 10, fontSize: 11.5, padding: '3px 0', borderBottom: '1px solid var(--border)', justifyContent: 'space-between' }}>
+                  <span style={{ fontWeight: 600 }}>{p.satellite}</span>
+                  <span className="muted">{p.aos ? new Date(p.aos).toLocaleTimeString() : '—'} · max {p.max_elevation_deg}° · {p.duration_min}min</span>
+                </div>
+              ))}
+              <div className="muted" style={{ fontSize: 10.5, marginTop: 6 }}>lat/lon auto-filled from the hub grid fix. Scan params are remembered for next time.</div>
+            </div>
+          )}
+          {selectedSatellite && (
+            <div style={{ padding: '0 16px 14px' }}>
+              <div style={{ fontWeight: 700, fontSize: 12, marginBottom: 4 }}>Pass forecast — {selectedSatellite.satellite} (#{selectedSatellite.norad})</div>
+              {(() => {
+                const match = (scanResult && scanResult.passes.find(p => String(p.norad) === String(selectedSatellite.norad))) || null
+                if (match) {
+                  const etaMs = new Date(match.aos).getTime() - Date.now()
+                  const eta = etaMs > 0 ? (etaMs > 60000 ? `${Math.floor(etaMs / 60000)}m ${Math.floor((etaMs % 60000) / 1000)}s` : `${Math.floor(etaMs / 1000)}s`) : 'now'
+                  return (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      <span style={{ fontWeight: 700, color: 'var(--text)' }}>{match.aos ? new Date(match.aos).toLocaleString() : '—'}</span> · AOS in <b>{eta}</b> · max elevation {match.max_elevation_deg}° · duration {match.duration_min}min
+                    </div>
+                  )
+                }
+                return (
+                  <div className="muted" style={{ fontSize: 11.5 }}>No forecast cached for this satellite yet — run a sky scan (above) for its constellation and the next-pass window will appear here.</div>
+                )
+              })()}
+            </div>
+          )}
         </div>
         </>)}
       </div>

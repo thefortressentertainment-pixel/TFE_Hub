@@ -148,11 +148,30 @@ function GodsEyeView({ positions, hubLocation, onSelect, theme }) {
     let animationFrame = null
     let controls = null
     const satMeshes = []
+    const meshByNorad = {}
     let observerMesh = null
     let globeGroup = null
 
     const doSelect = (p) => { setSelected(p); onSelect && onSelect(p) }
     apiRef.current.select = doSelect
+
+    const focusSat = (sat) => {
+      const m = sat && sat.norad != null ? meshByNorad[String(sat.norad)] : null
+      if (m && controls) {
+        controls.autoRotate = false
+        controls.target.lerp(m.position.clone().multiplyScalar(1.05), 1)
+        controls.update()
+      }
+    }
+    const releaseFocus = () => {
+      if (controls) {
+        controls.autoRotate = true
+        controls.target.set(0, 0, 0)
+        controls.update()
+      }
+    }
+    apiRef.current.focusSat = focusSat
+    apiRef.current.releaseFocus = releaseFocus
 
     const clearSats = () => {
       for (const m of satMeshes) {
@@ -161,6 +180,7 @@ function GodsEyeView({ positions, hubLocation, onSelect, theme }) {
         m.material.dispose()
       }
       satMeshes.length = 0
+      for (const k of Object.keys(meshByNorad)) delete meshByNorad[k]
     }
 
     const rebuild = (positions, hubLocation) => {
@@ -186,6 +206,7 @@ function GodsEyeView({ positions, hubLocation, onSelect, theme }) {
           mesh.userData.sat = p
           globeGroup.add(mesh)
           satMeshes.push(mesh)
+          if (p.norad != null) meshByNorad[String(p.norad)] = mesh
         }
       }
       if (observerMesh) { globeGroup.remove(observerMesh); observerMesh.geometry.dispose(); observerMesh.material.dispose(); observerMesh = null }
@@ -347,6 +368,8 @@ function GodsEyeView({ positions, hubLocation, onSelect, theme }) {
       if (scene) scene.traverse((o) => { if (o.geometry) o.geometry.dispose(); if (o.material && !Array.isArray(o.material)) o.material.dispose() })
       apiRef.current.rebuild = null
       apiRef.current.select = null
+      apiRef.current.focusSat = null
+      apiRef.current.releaseFocus = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -396,6 +419,10 @@ function GodsEyeView({ positions, hubLocation, onSelect, theme }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span style={{ color: 'var(--text-3)' }}>Group</span><span style={{ fontWeight: 700 }}>{(GROUP_COLORS[selected.group] || {}).label || selected.group}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span style={{ color: 'var(--text-3)' }}>Subpoint</span><span style={{ fontWeight: 700 }}>{selected.lat}°, {selected.lon}°</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}><span style={{ color: 'var(--text-3)' }}>Alt</span><span style={{ fontWeight: 700 }}>{selected.alt_km} km</span></div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <button className="btn-sm" style={{ flex: 1 }} onClick={() => apiRef.current.focusSat && apiRef.current.focusSat(selected)}>Focus ◉</button>
+              <button className="btn-sm" style={{ flex: 1 }} onClick={() => apiRef.current.releaseFocus && apiRef.current.releaseFocus()}>Release</button>
+            </div>
           </div>
         )}
       </div>

@@ -1,0 +1,3 @@
+#!/bin/bash
+# JARV's hands — see & drive the Mac (screenshot/OCR/click/type/keys).
+exec /opt/homebrew/Cellar/node/26.5.1/bin/node "/Users/tfe/fortress-hub/backend/tools/drive/jarv-drive.mjs" "$@"

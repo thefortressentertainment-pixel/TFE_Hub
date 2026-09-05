@@ -44,10 +44,15 @@ const DEFAULT_MODELS = ['deepseek-v4', 'deepseek-chat', 'deepseek-reasoner'];
  * Order here is the default failover order; override with GENIE_AI_PROVIDERS.
  */
 const PROVIDERS = [
+  // OpenCode Zen — the same gateway the opencode extension uses. big-pickle is the
+  // model behind the extension's default; the *-free models are $0. Inert without
+  // OPENCODE_API_KEY (mint one at https://opencode.ai/auth).
+  { name: 'opencode', baseUrl: 'https://opencode.ai/zen/v1', keyEnv: 'OPENCODE_API_KEY',
+    models: ['big-pickle', 'nemotron-3-ultra-free', 'mimo-v2.5-free', 'deepseek-v4-flash-free', 'laguna-s-2.1-free'] },
   // Validated live (2026-09): these currently serve chat with the keys in .env.
   { name: 'openrouter', baseUrl: 'https://openrouter.ai/api/v1', keyEnv: 'OPENROUTER_API_KEY',
     models: ['nvidia/nemotron-3.5-lightning:free', 'z-ai/glm-5.2:free', 'liquid/lfm-2.5-2.6b:free'] },
-  { name: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', keyEnv: 'NVIDIA_API_KEY',
+  { name: 'nvidia', baseUrl: 'https://integrate.api.nvidia.com/v1', keyEnv: 'NVIDIA_API_KEY', timeoutMs: 15000,
     models: ['deepseek-ai/deepseek-v4-flash-0731'] },
   { name: 'cohere', baseUrl: 'https://api.cohere.ai/compatibility/v1', keyEnv: 'COHERE_API_KEY',
     models: ['command-a-03-2025', 'command-r7b-12-2024', 'command-r-08-2024'] },
@@ -96,7 +101,7 @@ const PROVIDERS = [
   { name: 'ollama', baseUrl: null, keyEnv: null, local: true,
     models: ['qwen2.5:1.5b', 'qwen2.5:0.5b'] },
   // Keyless anonymous relay — last resort only (rate-limited, no SLA).
-  { name: 'pollinations', baseUrl: 'https://text.pollinations.ai', keyEnv: null, anonymous: true,
+  { name: 'pollinations', baseUrl: 'https://text.pollinations.ai', keyEnv: null, anonymous: true, path: '/openai',
     models: ['openai'] },
 ];
 
@@ -292,7 +297,7 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     if (options.tool_choice) body.tool_choice = options.tool_choice;
     const headers = { 'User-Agent': `fortress-genie-mesh/${AI_VERSION}`, 'Content-Type': 'application/json' };
     if (entry.apiKey) headers.Authorization = `Bearer ${entry.apiKey}`;
-    const resp = await requestJson('POST', `${entry.baseUrl}${entry.path || '/chat/completions'}`, headers, body, options.timeoutMs || 60000);
+    const resp = await requestJson('POST', `${entry.baseUrl}${entry.path || '/chat/completions'}`, headers, body, entry.timeoutMs || options.timeoutMs || 60000);
     if (!resp || !resp.choices || !resp.choices.length) throw new Error('empty completion response');
     const content = resp.choices[0].message && resp.choices[0].message.content;
     return {
@@ -330,21 +335,35 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
         } catch (e) {
           lastErr = e;
           h.fail++; h.lastError = String((e && e.message) || e);
+          const modelErr = e.status && (e.status === 400 || e.status === 404) && /model|not exist|not found|deployment/i.test(String(e.message));
           if (e.status === 429) h.cooldownUntil = Date.now() + 60000;
-          else if (e.status === 401 || e.status === 402 || e.status === 403) h.cooldownUntil = Date.now() + 15 * 60000;
+          else if ([401, 402, 403].indexOf(e.status) >= 0) h.cooldownUntil = Date.now() + 15 * 60000;
+          else if (e.status === 404 && !modelErr) h.cooldownUntil = Date.now() + 15 * 60000;
           else if (e.status >= 500) h.cooldownUntil = Date.now() + 30000;
-          const modelErr = e.status && (e.status === 400 || e.status === 404) && /model/i.test(String(e.message));
-          // 401/403 means the provider itself is unusable → next provider. 429 is
-          // per-model rate limiting on most hosts (each model has its own bucket),
-          // so keep trying the other models in this provider before moving on.
-          if (!modelErr && e.status !== 429) break;
+          // 429 and model-worded 400/404 ("Model Not Exist") are per-model issues:
+          // keep trying the OTHER models inside this provider. 401/403 = provider
+          // unusable; plain 404 = broken deployment/endpoint — step to the next
+          // provider (cooldown keeps us from rabbit-holing into it every turn).
+          if (e.status !== 429 && !modelErr) break;
         }
       }
     }
     if (options.forceLocal) {
       throw new Error(`privacy-local mode: no local model answered (Ollama at ${cfg.ollamaBaseUrl}); medical prompts are never sent to the cloud. ${lastErr ? lastErr.message : ''}`.trim());
     }
-    throw lastErr || new Error('no AI provider in the mesh accepted the request');
+    // Human-readable: report what each provider actually said instead of letting the
+    // last-visited provider's raw 4xx masquerade as the whole mesh's failure.
+    const tried = chain
+      .map((e) => {
+        const h = state.providerHealth[e.name];
+        if (!h || !h.fail) return null;
+        return `${e.name}(${String(h.lastError || '').slice(0, 70)})`;
+      })
+      .filter(Boolean)
+      .join('; ');
+    const summary = 'AI mesh: no provider answered this turn' + (tried ? ` — ${tried}` : '') + '.';
+    if (process.env.JARV_AI_DEBUG === '1') logFn && logFn('meshTransport exhausted: ' + tried);
+    throw new Error(summary);
   }
 
   /** Build the OpenAI-style messages array from prompt/messages + system prompt. */
@@ -381,7 +400,13 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     // Privacy routing: explicit local pin, or any medicinal content when
     // GENIE_AI_PRIVACY_LOCAL is on (default) — such prompts NEVER leave the
     // machine; they are answered only by the local quantized Ollama tier.
-    const textBlob = args.prompt != null ? String(args.prompt) : JSON.stringify(args.messages || []);
+    // Scan only USER-authored text (the operator's own words), never the system
+    // prompt or tool outputs: arbitrary fetched/OCR'd data must not silently pin
+    // a routine request to the local tier.
+    const userBlob = Array.isArray(args.messages)
+      ? args.messages.filter((m) => m && m.role === 'user').map((m) => String(m.content || '')).join('\n')
+      : '';
+    const textBlob = args.prompt != null ? String(args.prompt) : userBlob;
     const medical = looksMedical(textBlob);
     const forceLocal = args.local === true || args.forceLocal === true || (cfg.privacyLocal && medical);
     let messages = normalizeMessages(args);

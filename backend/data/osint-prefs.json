@@ -1,0 +1,5 @@
+{
+  "groups": "starlink,oneweb,iridium-next,gps",
+  "min_el": 10,
+  "passes": 3
+}

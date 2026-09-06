@@ -28,7 +28,18 @@ mkdir -p "$HOME/.moltis/hooks/fortress-gateway-start" "$HOME/.moltis/skills/fort
 cp "$ROOT/moltis/hooks/fortress-gateway-start/HOOK.md" "$ROOT/moltis/hooks/fortress-gateway-start/handler.sh" "$HOME/.moltis/hooks/fortress-gateway-start/"
 chmod +x "$HOME/.moltis/hooks/fortress-gateway-start/handler.sh"
 cp "$ROOT/moltis/skills/fortress-bridge/SKILL.md" "$HOME/.moltis/skills/fortress-bridge/"
-echo "==> installed hook + SKILL.md (restart moltis gateway to pick both up)"
+echo "==> installing jarv-brain (MoltenJarv lineage: soul + coding discipline + anatomy)"
+mkdir -p "$HOME/.moltis/skills/jarv-brain"
+cp "$ROOT/moltis/skills/jarv-brain/SKILL.md" "$ROOT/moltis/skills/jarv-brain/SOUL.md" \
+   "$ROOT/moltis/skills/jarv-brain/CODE_PLAYBOOK.md" "$ROOT/moltis/skills/jarv-brain/ANATOMY.md" \
+   "$HOME/.moltis/skills/jarv-brain/"
+echo "==> installed hook + skills (restart moltis gateway to pick them up)"
+
+# Tool protocol (data-dir + main agent workspace): keeps small local models
+# from treating exec/tool output as "user-provided" content.
+cp "$ROOT/moltis/tools/TOOLS.md" "$HOME/.moltis/TOOLS.md"
+cp "$ROOT/moltis/tools/TOOLS.md" "$HOME/.moltis/agents/main/TOOLS.md"
+echo "==> installed tool protocol (TOOLS.md)"
 
 if command -v moltris >/dev/null 2>&1; then BIN=moltis; elif command -v moltis >/dev/null 2>&1; then BIN=moltis; else
   echo "    moltis CLI not found on PATH — skip validation (expect at /Users/tfe/.local/bin)"
@@ -37,4 +48,4 @@ fi
 echo "==> validating with $BIN"
 "$BIN" config check || { echo "  config check failed — see above"; exit 1; }
 "$BIN" doctor || { echo "  doctor reported issues — see above (non-gateway)"; exit 1; }
-echo "==> done. Config validated. Launch the gateway manually when you're ready (moltis gateway)."
+echo "==> done. Config validated. Start the stack with moltris/scripts/start.sh."

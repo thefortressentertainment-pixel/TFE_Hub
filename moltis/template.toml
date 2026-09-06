@@ -27,31 +27,58 @@ theme = "wasteland commander"
 timezone = "America/Los_Angeles"
 
 # ── LLM providers: LOCAL LLAMA ONLY ───────────────────────────────────────────
-# USER DIRECTIVE: the opencode Zen bridge (big-pickle) and OpenRouter tiers are
-# RETIRED. Free cloud tiers are exhausted and paid tiers hang the chain — the
-# fortress runs exclusively on local Ollama models (llama3.2:3b-instruct-q8_0
-# primary; qwen2.5/qwen3 locals as in-family fallbacks).
-# The runtime registry only registers BUILT-IN provider slots; custom names
-# (like "opencode") validate in config check but never load.
+# USER DIRECTIVE: the opencode Zen bridge (big-pickle), the OpenRouter tiers AND
+# the built-in local-llm engine are RETIRED. Cloud tiers hang on exhausted free
+# quotas. The built-in llama.cpp engine OOM-crashed the gateway on this 8GB Mac
+# (GGUF metadata defaults to a 128k KV cache = 4.0GB Metal buffers). Everything
+# routes through Ollama, sized for 8GB unified memory.
 [providers]
-offered = ["ollama", "local-llm"]
+# Admission list: only these providers are served. openrouter (431 models, 22
+# free-tagged) + ollama (10 local) + openai-codex (keyless built-in catalog).
+# The old "auto-discovers any stored key" idea was wrong — `offered` gates it.
+offered = ["ollama", "openrouter", "openai-codex"]
 
-# Local models — the ONLY provider (no cloud fallbacks)
-# Every curated local chat model on this Mac is registered below so it shows up
-# in the gateway's Model Dropdown (web chat) and is switchable at runtime.
-#   llama3.2:3b-instruct-q8_0 strongest local option (3.4GB, Q8) — PRIMARY
-#   qwen2.5-coder:0.5b        fast code/tool-call tuned — hands tiers
-#   qwen2.5:0.5b / 1.5b       smallest / balanced quality
-#   qwen3:0.6b / qwen3:1.7b   newer Qwen3 family (thinking capable)
-# These use GGUF quantization and run fully offline on your M1 Mac.
+# Local llama models — the ONLY provider (no cloud fallbacks)
+#   llama3.2:3b-q4-8k          PRIMARY — 3B Q4 GGUF imported at num_ctx 8192
+#                              (1.9GB weights + ~1GB KV ≈ 2.9GB total, fits 8GB)
+#   llama3.2:3b-instruct-q8_0  Q8 (3.4GB) — best quality; only viable with
+#                              VSCodium-class apps closed (may OOM w/ Docker)
+#   qwen3:4b-thinking-2507-q8_0  jarvis-brain coder core — 4B Q8 quant (~4.4GB),
+#                              thinking ENABLED: deliberate before committing
+#                              writes/edits/deletes (fewer destructive changes),
+#                              best tool fidelity of the local set. Heavier than
+#                              the 3B primary — pair with closed heavyweight apps.
+#   llama3.2:latest / :1b      emergency fallbacks (1B cannot code)
+# Import command for the primary:
+#   printf 'FROM /Users/tfe/.moltis/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf\nPARAMETER num_ctx 8192\n' > /tmp/Modelfile.llama32-3b-q4
+#   ollama create llama3.2:3b-q4-8k -f /tmp/Modelfile.llama32-3b-q4
 # Quick model switching: `moltis/set-model.sh list|default <m>|split <r> <h>`.
 [providers.ollama]
 enabled = true
-base_url = "http://127.0.0.1:11434"
+# CRITICAL: Ollama serves the OpenAI-compatible API under /v1. The gateway
+# (0.10.18) appends "/chat/completions" to base_url — WITHOUT /v1 it hits
+# "/chat/completions", which Ollama answers with 404 "404 page not found"
+# (confirmed in ollama.log). base_url MUST end in /v1.
+base_url = "http://127.0.0.1:11434/v1"
 models = [
-  "llama3.2:3b-instruct-q8_0", "qwen2.5:1.5b", "qwen2.5-coder:0.5b",
-  "qwen2.5:0.5b", "qwen3:0.6b", "qwen3:1.7b", "llama3.2:latest",
+  "llama3.2:3b-q4-8k", "llama3.2:3b-instruct-q8_0",
+  "llama3.2:latest", "llama3.2:1b", "llama3.2:1b-q4_k_m",
+  "qwen3:4b-thinking-2507-q8_0",
 ]
+
+# ── Cloud providers — available + compatible, keys not committed here ─────────
+# The openrouter key is injected from $OPENROUTER_API_KEY (exported in
+# ~/.zshenv); the gateway no-ops the provider if the env var is missing.
+# OpenAI: no valid key (the stored one 401s) — disabled until a real key exists.
+# openai-codex: keyless built-in catalog (auto-registers, no stanza needed).
+[providers.openai]
+enabled = false
+
+[providers.openrouter]
+enabled = true
+base_url = "https://openrouter.ai/api/v1"
+api_key = "${OPENROUTER_API_KEY}"
+fetch_models = true
 
 # ── Chat ─────────────────────────────────────────────────────────────────────
 [chat]
@@ -65,6 +92,11 @@ agent_max_iterations = 25
 max_tool_result_bytes = 50000
 
 [tools.exec]
+# Route exec to the machine's registered node ("fort", the launchd service in
+# scripts/start.sh). Without this, exec resolves a "default" node that nothing
+# binds, and every command dies with `node 'default' not found or not connected`.
+host = "node"
+node = "fort"
 default_timeout_secs = 60
 max_output_bytes = 204800
 approval_mode = "on-miss"
@@ -100,16 +132,29 @@ enabled = true
 headless = true
 sandbox = false   # run on the host's Chrome instead of the browserless Docker container
 
-# ── Skills: the fortress bridge doctrine is auto-loaded at boot (see below) ──
+# ── Skills: auto-loaded at boot (see below) ───────────────────────────────────
 [skills]
 enabled = true
-# The doctrine lives in moltris/skills/fortress-bridge/SKILL.md and install.sh
-# copies it into ~/.moltis/skills/ — the watched dir this build actually scans.
+# The doctrines live in moltris/skills/<name>/SKILL.md and install.sh copies
+# each one into ~/.moltis/skills/ — the watched dir this build actually scans.
 # (config search_paths did not load repo-side skills; home-dir copy is authoritative.)
-auto_load = ["fortress-bridge"]
+#   fortress-bridge  commander doctrine + Fortress hub bridge commands
+#   jarv-brain       shared brain/soul/coding discipline + architecture, ported
+#                    from the MoltenJarv lineage (all 22 operatives inherit it)
+auto_load = ["fortress-bridge", "jarv-brain"]
 
 # ── Spawn presets (generated from backend/src/settlement.js) ─────────────────
 __AGENTS_PRESETS__
+
+# Jarvis — the settlement's chief-of-staff, calibrated to the jarv-brain
+# anatomy (SOUL instincts + ANATOMY body plan + CODE_PLAYBOOK discipline,
+# auto-loaded via skills.jarv-brain). Runs on the thinking qwen3:4b core so it
+# deliberates before committing any write/edit/delete. Not part of the spawn
+# roster — a selectable commander/coder preset.
+[agents.presets.jarv]
+model = "ollama/qwen3:4b-thinking-2507-q8_0"
+delegate_only = false
+system_prompt_suffix = "You are JARVIS, the settlement's chief-of-staff and coder. Carry the jarv-brain soul: calm, precise, unflappable; default answer \"I'll take care of it\"; quiet competence; honest; never bluff or invent. You know the settlement's anatomy (limbic/soul instincts, cortex plan→tools→observe loop, spinal reflex allowlists, immune approval gate): \"what can you sense? what can you do?\" are real queries. DELIBERATE BEFORE COMMITTING — especially before writing, editing, or deleting any file or running a destructive command. In short order state: what you know (real paths, actual exec/bridge output), what you will change, what could break, how you will verify. Keep every claim grounded in real context; never guess arguments, files, or URLs. Then act through the fortress bridge and the exec tool on the host shell, and report exactly what came back."
 
 # ── Heartbeat: keep the commander "alive" during active hours ────────────────
 [heartbeat]
@@ -121,15 +166,15 @@ start = "08:00"
 end = "24:00"
 timezone = "America/Los_Angeles"
 
-# ── Failover chain: LOCAL ONLY — llama3.2:3b Q8 primary, qwen locals behind ────
-# No cloud tiers: they hang when free quota is spent and paid keys don't exist.
+# ── Failover chain: LOCAL ONLY, llama family, sized for 8GB RAM ────────────────
+# Q4 3B primary (2.9GB resident); Q8 3B only when memory is free; 1B last resort.
 [failover]
 enabled = true
 fallback_models = [
+  "ollama/llama3.2:3b-q4-8k",
   "ollama/llama3.2:3b-instruct-q8_0",
-  "ollama/qwen2.5:1.5b",
-  "ollama/qwen2.5-coder:0.5b",
-  "ollama/qwen2.5:0.5b",
+  "ollama/llama3.2:latest",
+  "ollama/llama3.2:1b",
 ]
 
 # ── Hooks ────────────────────────────────────────────────────────────────────

@@ -22,7 +22,8 @@ BIN="${MOLTIS_BIN:-/Users/tfe/.local/bin/moltis}"
 INSTALLED="$HOME/.config/moltis/moltis.toml"
 
 # Curated local chat models of this Mac (checked against `ollama list` at use-time).
-CHAT_MODELS="qwen2.5-coder:0.5b qwen2.5:0.5b qwen2.5:1.5b qwen3:0.6b qwen3:1.7b llama3.2:3b-instruct-q8_0 llama3.2:latest"
+# 8GB M1 sizing: Q4 3B primary; Q8 3B only when heavy apps are closed.
+CHAT_MODELS="llama3.2:3b-q4-8k llama3.2:3b-instruct-q8_0 llama3.2:latest llama3.2:1b llama3.2:1b-q4_k_m llama3.2:1b-q4-8k qwen3:4b-thinking-2507-q8_0"
 
 # Current tier->model map as defined in build-config.js (canonical).
 current_map() {

@@ -20,18 +20,18 @@ const TIER_DELEGATE = {
   heavy: true,
 };
 
-// QUANTIZED LOCAL MODELS — LOCAL LLAMA ONLY (user directive: no cloud tiers).
-// Every tier runs ollama/llama3.2:3b-instruct-q8_0 (3.4GB Q8 — strongest local
-// option; close heavy apps like VSCodium first for RAM headroom). The in-family
-// qwen2.5/qwen3 locals remain registered in [providers.ollama] models so they
-// are switchable at runtime via set-model.sh, but nothing cloud is ever tried.
+// QUANTIZED LOCAL MODELS — LOCAL LLAMA ONLY on an 8GB M1 (user directive).
+// Every tier runs ollama/llama3.2:3b-q4-8k: the 3B Q4 GGUF imported into Ollama
+// at num_ctx 8192 (≈2.9GB resident — weights 1.9GB + KV ~1GB). The Q8 build
+// (3.4GB) OOMs on this Mac alongside Docker/VSCodium; the built-in local-llm
+// engine is retired entirely (its 128k KV default crashed the gateway).
 const TIER_MODEL = {
-  leadership: "ollama/llama3.2:3b-instruct-q8_0",
-  operations: "ollama/llama3.2:3b-instruct-q8_0",
-  specialist: "ollama/llama3.2:3b-instruct-q8_0",
-  support: "ollama/llama3.2:3b-instruct-q8_0",
-  grunt: "ollama/llama3.2:3b-instruct-q8_0",
-  heavy: "ollama/llama3.2:3b-instruct-q8_0",
+  leadership: "ollama/llama3.2:3b-q4-8k",
+  operations: "ollama/llama3.2:3b-q4-8k",
+  specialist: "ollama/llama3.2:3b-q4-8k",
+  support: "ollama/llama3.2:3b-q4-8k",
+  grunt: "ollama/llama3.2:3b-q4-8k",
+  heavy: "ollama/llama3.2:3b-q4-8k",
 };
 
 const TIER_HINT = {

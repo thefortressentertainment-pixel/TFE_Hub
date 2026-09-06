@@ -192,6 +192,10 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     // --- free-tier mesh configuration ---
     providerOrder: (config.providerOrder || process.env.GENIE_AI_PROVIDERS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     localFirst: envBool(config.localFirst != null ? config.localFirst : process.env.GENIE_AI_LOCAL_FIRST, false),
+    // LOCAL LLAMA ONLY: when true, EVERY request chain is ollama-local — keyed or
+    // anonymous cloud providers are never attempted (they hang on exhausted free
+    // quotas / absent paid keys).
+    localOnly: envBool(config.localOnly != null ? config.localOnly : process.env.GENIE_AI_LOCAL_ONLY, false),
     privacyLocal: envBool(config.privacyLocal != null ? config.privacyLocal : process.env.GENIE_AI_PRIVACY_LOCAL, true),
     ollamaBaseUrl: (config.ollamaBaseUrl || process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434/v1').replace(/\/+$/, ''),
     ollamaModels: (config.ollamaModels || process.env.OLLAMA_MODELS || '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -237,9 +241,12 @@ function makeAiBridge({ pool, log, config = {}, transport, getMesh }) {
     return cfg.ollamaModels.length ? cfg.ollamaModels.slice() : (o ? o.models.slice() : ['qwen2.5:1.5b', 'qwen2.5:0.5b']);
   }
 
-  /** Ordered attempt list. forceLocal pins to on-machine Ollama (privacy). */
+  /** Ordered attempt list. forceLocal pins to on-machine Ollama (privacy).
+   *  cfg.localOnly (GENIE_AI_LOCAL_ONLY=true) pins EVERY chain to on-machine
+   *  Ollama — the local-llama-only doctrine; cloud is never attempted. */
   function makeChain(forceLocal, noLocalFallback) {
-    if (forceLocal) {
+    if (forceLocal || cfg.localOnly) {
+      if (noLocalFallback) return [];
       return [{ name: 'ollama-local', baseUrl: cfg.ollamaBaseUrl, apiKey: '', local: true, models: localModels() }];
     }
     const chain = [];

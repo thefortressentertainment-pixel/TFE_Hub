@@ -20,19 +20,18 @@ const TIER_DELEGATE = {
   heavy: true,
 };
 
-// QUANTIZED LOCAL MODELS: All tiers use local Ollama models to avoid burning
-// cloud token limits. qwen2.5:1.5b for complex reasoning (operations/specialist/
-// leadership). The hands tiers (support/grunt/heavy) use qwen2.5-coder:0.5b —
-// same ~115 tok/s as qwen2.5:0.5b but code/tool-call tuned, which is what
-// bridge dispatch and spawn_agent need. Falls back to the opencode bridge
-// (big-pickle) only when explicitly requested for complex tasks.
+// QUANTIZED LOCAL MODELS — LOCAL LLAMA ONLY (user directive: no cloud tiers).
+// Every tier runs ollama/llama3.2:3b-instruct-q8_0 (3.4GB Q8 — strongest local
+// option; close heavy apps like VSCodium first for RAM headroom). The in-family
+// qwen2.5/qwen3 locals remain registered in [providers.ollama] models so they
+// are switchable at runtime via set-model.sh, but nothing cloud is ever tried.
 const TIER_MODEL = {
-  leadership: "ollama/qwen2.5:1.5b",
-  operations: "ollama/qwen2.5:1.5b",
-  specialist: "ollama/qwen2.5:1.5b",
-  support: "ollama/qwen2.5-coder:0.5b",
-  grunt: "ollama/qwen2.5-coder:0.5b",
-  heavy: "ollama/qwen2.5-coder:0.5b",
+  leadership: "ollama/llama3.2:3b-instruct-q8_0",
+  operations: "ollama/llama3.2:3b-instruct-q8_0",
+  specialist: "ollama/llama3.2:3b-instruct-q8_0",
+  support: "ollama/llama3.2:3b-instruct-q8_0",
+  grunt: "ollama/llama3.2:3b-instruct-q8_0",
+  heavy: "ollama/llama3.2:3b-instruct-q8_0",
 };
 
 const TIER_HINT = {

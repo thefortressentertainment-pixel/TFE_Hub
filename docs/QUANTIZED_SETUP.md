@@ -52,25 +52,27 @@ preventing cloud provider token limits from being exhausted.
 
 ## Agent Tier → Model Mapping
 
+All tiers run the same local llama (switch anytime with `moltis/set-model.sh split <r> <h>`):
+
 | Tier | Agents | Model | Rationale |
 |------|--------|-------|-----------|
-| Leadership (3) | General Prestyn, Mayor Hancok, Elder Maxxn | qwen2.5:1.5b | Strategic reasoning needs more context |
-| Operations (4) | Reporter Pyper, Nick Valentyne, Dr. Kyuri, The Mechanist | qwen2.5:1.5b | Technical tasks need quality |
-| Specialist (4) | Mister Handy Hax, Paladin Danze, Curie, Courier | qwen2.5:1.5b | Specialized knowledge tasks |
-| Support (4) | Perimeter Monitor, Sentry Bot, Protectron, Eyebot | qwen2.5-coder:0.5b | Simple monitoring/replying; tool-call tuned |
-| Grunt (4) | Mole Ratt, Bloat Fli, BroodMother, Synth | qwen2.5-coder:0.5b | Hands work via bridge dispatch; doesn't need large context |
-| Heavy (3) | Mr. Gutsy, Liberty Prime, Deathclaw | qwen2.5-coder:0.5b | High-risk tasks, fast execution |
+| Leadership (3) | General Prestyn, Mayor Hancok, Elder Maxxn | llama3.2:3b-instruct-q8_0 | Strongest local option |
+| Operations (4) | Reporter Pyper, Nick Valentyne, Dr. Kyuri, The Mechanist | llama3.2:3b-instruct-q8_0 | Strongest local option |
+| Specialist (4) | Mister Handy Hax, Paladin Danze, Curie, Courier | llama3.2:3b-instruct-q8_0 | Strongest local option |
+| Support (4) | Perimeter Monitor, Sentry Bot, Protectron, Eyebot | llama3.2:3b-instruct-q8_0 | Strongest local option |
+| Grunt (4) | Mole Ratt, Bloat Fli, BroodMother, Synth | llama3.2:3b-instruct-q8_0 | Strongest local option |
+| Heavy (3) | Mr. Gutsy, Liberty Prime, Deathclaw | llama3.2:3b-instruct-q8_0 | Strongest local option |
 
 ## How It Solves the Token Limit Problem
 
 Before: All 22 agents + OpenChamber were using cloud models (DeepSeek, OpenRouter, OpenCode)
 which share a single quota that was exhausted in one burst.
 
-After: All 22 agents use local quantized models running on your M1 Mac:
-- No cloud API calls (unless local models fail)
-- No shared token quota
-- Each agent operates independently with infinite local context
-- Only complex coding tasks fall back to the OpenCode Zen bridge (big-pickle)
+After (**LOCAL LLAMA ONLY**): All 22 agents run `ollama/llama3.2:3b-instruct-q8_0` on your M1 Mac:
+- Zero cloud API calls — the OpenCode Zen bridge (big-pickle) and OpenRouter tiers are RETIRED
+- No shared token quota, and no hangs from exhausted free tiers or absent paid keys
+- Failover chain is Ollama-only: llama3.2:3b-instruct-q8_0 → qwen2.5:1.5b → qwen2.5-coder:0.5b → qwen2.5:0.5b
+- The 3.4GB Q8 model wants RAM headroom — close memory-heavy apps (e.g. VSCodium) for best throughput
 
 ## Changing the LLM model on Moltis
 

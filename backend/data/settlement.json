@@ -1,15 +1,15 @@
 {
-  "updatedAt": "2026-09-05T14:32:49.685Z",
+  "updatedAt": "2026-09-06T00:06:10.317Z",
   "agents": {
     "core": {
-      "roi": 78,
-      "uses": 2,
-      "lastUsedAt": "2026-09-05T14:31:19.588Z"
+      "roi": 80,
+      "uses": 3,
+      "lastUsedAt": "2026-09-06T00:06:10.316Z"
     },
     "eyebot": {
-      "roi": 79,
-      "uses": 4,
-      "lastUsedAt": "2026-09-05T14:31:35.535Z"
+      "roi": 83,
+      "uses": 6,
+      "lastUsedAt": "2026-09-06T00:03:37.544Z"
     },
     "curie": {
       "roi": 78,

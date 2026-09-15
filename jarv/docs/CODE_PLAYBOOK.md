@@ -1,29 +1,29 @@
 # CODE_PLAYBOOK.md — coding & housekeeping standards
 
 Ported from the MoltenJarv lineage and adapted to this repo. Follow these
-whenever editing the Fortress Hub codebase — the same discipline on the
-settlement's hands that the original code-forge used, applied to
+whenever editing the Fortress Hub codebase — the same discipline on JARV's
+hands that the original code-forge used, applied to
 `/Users/tfe/fortress-hub`.
 
 ## The repo
 
 Node monorepo (npm workspaces: `backend`, `worker`, `frontend`), plus
-`moltis/` (the gateway config + skills + bridge), `scripts/`, `tools/`, `docs/`.
+`jarv/` (the terminal IDE, its cabinet, and this doctrine), `moltis/`
+(deprecated gateway config — retired, kept only as history).
 
 - `backend/` — Express hub: `src/server.js` (HTTP + socket.io API), `src/settlement.js`
   (the 22-agent roster, tiers, ROI logic), `src/` mesh/genie/ai modules,
   `/Users/tfe/fortress-hub/backend/data/settlement.json` (live ROI state).
 - `worker/` — Bull queue workers.
 - `frontend/` — React (Vite + Babylon), the dashboard.
-- `moltis/` — `template.toml` + `scripts/build-config.js` (config generation),
-  `skills/` (doctrine loaded by the gateway), `comm/fortress-bridge.py`,
-  `hooks/`, `install.sh`, `set-model.sh`.
+- `jarv/` — `ide.py` (the REPL), `toolkit.py` (the filing cabinet),
+  `docs/` (this doctrine), `JARV.md` (the canonical doctrine).
 - Verify commands:
   - Backend syntax: `node --check <file>`
   - Backend smoke: `npm --workspace backend run smoke` (mesh, ai-bridge, osint,
     settlement, telegram-tunnel)
   - Frontend build: `npm --workspace frontend run build`
-  - Config: `sh moltris/install.sh`
+  - IDE/cabinet: `python3 jarv/toolkit.py` (self-check by running a verb)
 
 ## Understand the code before touching it
 

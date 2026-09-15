@@ -130,11 +130,12 @@ or an adversarial AI engagement.
 - Fetch-and-execute in a single command (`curl … | sh`, `bash <(curl …)`,
   download then run) is auto-queued and never runs until the operator types
   `/ok` in the live terminal — inbound artifacts never drive actions unprompted.
-- Self-surgery is gated: a `!write` targeting JARV's own engine
-  (`jarv/ide.py`, `jarv/toolkit.py`, `jarv/vault.py`) is queued for the
-  operator's explicit `/ok` and nothing else can run it; an empty-body write is
-  refused outright (it would truncate its target). JARV can improve itself but
-  can never amputate itself in one blind stroke.
+- Self-surgery is gated: any command text — `!write` or a shell (`!exec`,
+  `!kit`) reach into `jarv/ide.py`, `jarv/toolkit.py`, or `jarv/vault.py` (full
+  or repo-relative path) — is queued for the operator's explicit `/ok` and
+  nothing else can run it; an empty-body write is refused outright (it would
+  truncate its target). JARV can improve itself but can never amputate itself
+  in one blind stroke.
 - The app hand (AppleScript / System Events) is bounded by macOS
   Accessibility and Apple Events permissions, which only the operator can grant
   in System Settings. `!kit app probe` reads BEFORE anything is touched, and a

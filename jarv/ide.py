@@ -65,6 +65,28 @@ SELF_CORE = frozenset(
     os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), f))
     for f in ("ide.py", "toolkit.py", "vault.py")
 )
+# Any command text (exec, kit, write) naming a self-core file — full path or
+# repo-relative — is treated as self-surgery and queued for the operator's /ok.
+SELF_CORE_NAMES = frozenset(
+    sp for _p in SELF_CORE
+    for sp in (_p, os.path.relpath(_p, REPO))
+)
+
+
+def self_core_hit(text):
+    return next((sp for sp in SELF_CORE_NAMES if sp in text), None)
+
+
+# Read-only cabinet routes never mutate the engine; anything else that names a
+# core file is gated. Fail-closed: unknown subcommands count as mutators.
+_KIT_READ_OK = ("sense ", "sys ", "mem recall ", "mem lessons ", "mem timeline ",
+                "secur scan", "secur status", "secur list", "app probe ",
+                "skill list", "skill run ", "build status", "build check")
+
+
+def is_read_kit(text):
+    t = " " + text
+    return any(k in t for k in _KIT_READ_OK)
 # The real gates are the vault password (hard gate), the operator's live /ok on
 # web-driven steps, and the judgment rails (never deceive, no destruction without
 # undo, no network writes without the operator agreeing). Fetch-and-execute in a
@@ -217,6 +239,8 @@ def run_tool(line, cwd):
         with open(path, errors="replace") as fh:
             return f"DOCTRINE {name}:\n" + fh.read()[:12000], cwd
     if head == "!kit":
+        if self_core_hit(arg) and not is_read_kit(arg):
+            return "_self_core_pending_", cwd
         out = sh(f"python3 {shlex.quote(TOOLKIT)} {arg}", cwd)
         return (out or f"!kit ran (no output), args: {arg}"), cwd
     if head == "!read":
@@ -225,6 +249,8 @@ def run_tool(line, cwd):
     if head == "!exec":
         if not arg:
             return "!exec: no command", cwd
+        if self_core_hit(arg):
+            return "_self_core_pending_", cwd  # self-surgery via shell — operator's /ok
         if __web_exec(arg):
             return "_web_exec_pending_", cwd  # loop queues this for the operator's /ok
         return sh(f"cd {shlex.quote(cwd)} && {arg}", cwd), cwd
@@ -568,7 +594,7 @@ def main():
                             # Self-surgery is allowed, but never blind: queue for
                             # the operator's explicit /ok in this live terminal.
                             print("  \x1b[33m⛔ self-core write — that is JARV's own engine (ide/toolkit/vault.py).\x1b[0m")
-                            print("  \x1b[33m   Not executed. Queued for your //ok — nothing else can run it.\x1b[0m")
+                            print("  \x1b[33m   Not executed. Queued for your /ok — nothing else can run it.\x1b[0m")
                             pending = [line]
                             turns.append({"role": "assistant", "content": line.strip()})
                             break
@@ -601,6 +627,15 @@ def main():
                     acted = True
                     continue
                 print(f"\x1b[36m↳ {line[:200]}\x1b[0m")
+                if out == "_self_core_pending_":
+                    contam = True
+                    pending = [line]
+                    print("  \x1b[33m⛔ self-surgery — that command reaches JARV's own engine (ide/toolkit/vault.py).\x1b[0m")
+                    print(f"  \x1b[33m   queued for your /ok in the live terminal: {line}\x1b[0m")
+                    turns.append({"role": "assistant", "content": line})
+                    turns.append({"role": "system", "content": "SELF-SURGERY queued for the operator's /ok (command references the engine's own files)."})
+                    acted = True
+                    break
                 if out == "_web_exec_pending_":
                     if was_ok:
                         # the operator explicitly /ok'd THIS step — run it once

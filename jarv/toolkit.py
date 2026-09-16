@@ -620,6 +620,220 @@ def vehicle_probe(name):
     return report(lines)
 
 
+# ── gearbox: vibe the vehicle, don't hand-code it ─────────────────────────────
+# The tiny model reliably FILLS SLOTS; it rarely writes API-perfect bpy from
+# memory. So each console vehicle also ships a gearbox: high-level verbs that
+# expand to pre-verified code. `vehicle drive Blender -- add cube size=2
+# color=red name=KeyCube` parses to slots, expands, runs. Free-form bpy still
+# works for power use; a wrong verb TEACHES the verb list instead of failing.
+
+COLORS = {"red": (0.85, 0.02, 0.06), "blue": (0.05, 0.25, 0.9),
+          "green": (0.05, 0.75, 0.15), "white": (0.9, 0.9, 0.9),
+          "black": (0.02, 0.02, 0.02), "yellow": (0.95, 0.8, 0.1),
+          "orange": (1.0, 0.5, 0.05), "purple": (0.55, 0.1, 0.85),
+          "teal": (0.0, 0.65, 0.6), "gray": (0.5, 0.5, 0.5),
+          "pink": (0.95, 0.5, 0.75), "gold": (1.0, 0.75, 0.15)}
+
+_GEAR_VERBS = ("clear", "add", "move", "scale", "rotate", "rename",
+               "color", "render", "export", "list", "count")
+
+
+def _gear_parse(src):
+    toks = src.split()
+    verb = toks[0].lower()
+    params = {}
+    pos = []
+    for t in toks[1:]:
+        if "=" in t:
+            k, v = t.split("=", 1)
+            params[k.strip().lower()] = v
+        else:
+            pos.append(t)
+    return verb, pos[0] if pos else "", params, tuple(pos[1:])
+
+
+def _gear_f(slots, default):
+    try:
+        return float(slots.get("s", slots.get("size", default)))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _gear_w(slots, *keys, default=0.0):
+    for k in keys:
+        if k in slots:
+            try:
+                return float(slots[k])
+            except (TypeError, ValueError):
+                pass
+    return float(default)
+
+
+def _gear_xyz(slots, key, default):
+    if key in slots:
+        try:
+            return [float(v) for v in slots[key].replace(",", " ").split()][:3]
+        except (TypeError, ValueError):
+            pass
+    if "at" in slots:
+        try:
+            return [float(v) for v in slots["at"].replace(",", " ").split()][:3]
+        except (TypeError, ValueError):
+            pass
+    return list(default)
+
+
+def _gear_color(slots):
+    c = slots.get("c", slots.get("color", ""))
+    rgb = COLORS.get(c.lower()) or COLORS.get("gray")
+    return c.lower(), rgb
+
+
+def _gear_path(v, default):
+    p = v if str(v) else ""
+    if not p:
+        p = default
+    return os.path.expanduser(p)
+
+
+def _gear_blender(verb, primary, params, rest=()):
+    """Expand a vibe verb into verified bpy. Returns (src, summary)."""
+    if verb == "clear":
+        return ("bpy.ops.object.select_all(action='SELECT'); bpy.ops.object.delete(use_global=False)",
+                "cleared the scene (all objects deleted)")
+    if verb == "add":
+        shape = (primary or "cube").lower()
+        at = _gear_xyz(params, "at", (0, 0, 0))
+        col, rgb = _gear_color(params)
+        name = params.get("name", "")
+        if shape in ("light", "lamp"):
+            kind = str(params.get("kind", "point")).upper()
+            src = (f"import bpy\n"
+                   f"l = bpy.data.lights.new('{name or 'KeyLight'}', type='{kind}')\n"
+                   f"o = bpy.data.objects.new(l.name, l)\n"
+                   f"bpy.context.collection.objects.link(o)\n"
+                   f"o.location = ({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})\n"
+                   f"l.energy = {_gear_w(params, 'energy', 'e', default=1000)}\n"
+                   f"result = o.name")
+            return src, f"added a {kind} light at ({at[0]:.0f},{at[1]:.0f},{at[2]:.0f})"
+        if shape == "camera":
+            src = (f"import bpy\n"
+                   f"c = bpy.data.cameras.new('{name or 'KeyCam'}')\n"
+                   f"o = bpy.data.objects.new(c.name, c)\n"
+                   f"bpy.context.collection.objects.link(o)\n"
+                   f"o.location = ({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})\n"
+                   f"bpy.context.scene.camera = o\n"
+                   f"result = o.name")
+            return src, f"added camera '{name or 'KeyCam'}' at ({at[0]:.0f},{at[1]:.0f},{at[2]:.0f}) and made it the active camera"
+        size = _gear_f(params, 2)
+        call = {"cube": f"bpy.ops.mesh.primitive_cube_add(size={size})",
+                "sphere": f"bpy.ops.mesh.primitive_uv_sphere_add(radius={size / 2})",
+                "plane": f"bpy.ops.mesh.primitive_plane_add(size={size})",
+                "cylinder": f"bpy.ops.mesh.primitive_cylinder_add(radius={size / 2}, depth={size})",
+                "torus": f"bpy.ops.mesh.primitive_torus_add(major_radius={size / 2}, minor_radius={size / 8})"}.get(shape)
+        if not call:
+            raise ValueError(f"unknown shape '{shape}' (shapes: cube sphere plane cylinder torus light camera)")
+        src = f"import bpy\n{call}\n" \
+              f"o = bpy.context.active_object\n" \
+              f"o.name = {name!r} if {name!r} else o.name\n" \
+              f"o.location = ({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})\n"
+        if col:
+            src += (f"m = bpy.data.materials.new('{name or o.name}' + '_mat')\n"
+                    f"m.diffuse_color = ({rgb[0]:.3f}, {rgb[1]:.3f}, {rgb[2]:.3f}, 1.0)\n"
+                    f"o.data.materials.append(m)\n")
+        src += "result = o.name"
+        return src, f"added {shape} size={size} at ({at[0]:.0f},{at[1]:.0f},{at[2]:.0f})" + (f" colored {col}" if col else "")
+    if verb == "move":
+        target = primary or "active"
+        at = _gear_xyz(params, "to", (0, 0, 0))
+        return (f"import bpy\n"
+                f"o = bpy.data.objects.get({target!r}) or bpy.context.active_object\n"
+                f"o.location = ({at[0]:.3f}, {at[1]:.3f}, {at[2]:.3f})\n"
+                f"result = (o.name, tuple(o.location))",
+                f"moved '{target}' to ({at[0]:.0f},{at[1]:.0f},{at[2]:.0f})")
+    if verb == "scale":
+        target = primary or "active"
+        xyz = _gear_xyz(params, "to", (1, 1, 1))
+        return (f"import bpy\n"
+                f"o = bpy.data.objects.get({target!r}) or bpy.context.active_object\n"
+                f"o.scale = ({xyz[0]:.3f}, {xyz[1]:.3f}, {xyz[2]:.3f})\n"
+                f"result = (o.name, tuple(o.scale))",
+                f"scaled '{target}' to ({xyz[0]:.1f},{xyz[1]:.1f},{xyz[2]:.1f})")
+    if verb == "rotate":
+        target = primary or "active"
+        deg = " ".join(params.get("to", params.get("by", "0 0 90")).replace(",", " ").split())
+        nums = [float(v) for v in deg.split()][:3]
+        rad = [round(n * 3.14159265 / 180, 3) for n in nums]
+        return (f"import bpy\n"
+                f"o = bpy.data.objects.get({target!r}) or bpy.context.active_object\n"
+                f"o.rotation_euler = ({rad[0]}, {rad[1]}, {rad[2]})\n"
+                f"result = (o.name, tuple(round(x, 3) for x in o.rotation_euler))",
+                f"rotated '{target}' by ({nums[0]:.0f},{nums[1]:.0f},{nums[2]:.0f})\u00b0")
+    if verb == "rename":
+        old = primary or "active"
+        new = params.get("as", params.get("to")) or ""
+        if not new and rest:
+            new = " ".join(rest[1:] if rest[0].lower() in ("as", "to") else rest)
+        if not new:
+            raise ValueError("rename needs `as=<new name>` (e.g. rename KeyCube as Terrain)")
+        return (f"import bpy\n"
+                f"o = bpy.data.objects.get({old!r}) or bpy.context.active_object\n"
+                f"o.name = {new!r}\n"
+                f"result = (o.name, o.type)",
+                f"renamed '{old}' -> '{new}'")
+    if verb == "color":
+        target = primary or "active"
+        col, rgb = _gear_color(params)
+        return (f"import bpy\n"
+                f"o = bpy.data.objects.get({target!r}) or bpy.context.active_object\n"
+                f"mat = bpy.data.materials.new('{target}_mat')\n"
+                f"mat.diffuse_color = ({rgb[0]:.3f}, {rgb[1]:.3f}, {rgb[2]:.3f}, 1.0)\n"
+                f"o.data.materials.append(mat)\n"
+                f"result = (o.name, '{col}')",
+                f"colored '{target}' {col}")
+    if verb == "render":
+        out = _gear_path(params.get("to", params.get("file", "")), "~/Desktop/" + (primary or "jarv-render") + ".png")
+        base = os.path.basename(out)
+        ext = os.path.splitext(base)[1].lower()
+        fmt = "JPEG" if ext in (".jpg", ".jpeg") else "PNG"
+        w = _gear_w(params, "w", "width", default=1920)
+        h = _gear_w(params, "h", "height", default=1080)
+        return (f"import bpy\n"
+                f"sc = bpy.context.scene\n"
+                f"sc.render.filepath = {out!r}\n"
+                f"sc.render.image_settings.file_format = '{fmt}'\n"
+                f"sc.render.resolution_x = {int(w)}; sc.render.resolution_y = {int(h)}\n"
+                f"bpy.ops.render.render(write_still=True)\n"
+                f"import os; result = os.path.exists({out!r})",
+                f"rendered {out} ({int(w)}x{int(h)}, {fmt})")
+    if verb == "export":
+        fmt = (primary or "obj").lower()
+        out = _gear_path(params.get("to", params.get("file", "")), f"~/Desktop/jarv-export.{fmt}")
+        op = {"obj": "bpy.ops.wm.obj_export(filepath=r)",
+              "fbx": "bpy.ops.export_scene.fbx(filepath=r)",
+              "stl": "bpy.ops.wm.stl_export(filepath=r)"}.get(fmt)
+        if not op:
+            raise ValueError(f"unknown export format '{fmt}' (formats: obj fbx stl)")
+        return (f"import bpy, os\n"
+                f"r = {out!r}\n"
+                f"{op}\n"
+                f"result = os.path.exists(r)",
+                f"exported scene as {fmt} -> {out}")
+    if verb == "list":
+        pat = params.get("of", params.get("type", ""))
+        flt = f" if o.type == {pat.upper()!r}" if pat else ""
+        return (f"import bpy\n"
+                f"result = [(o.name, o.type, tuple(round(float(v), 2) for v in o.location)) for o in bpy.data.objects{flt}]",
+                f"listed objects" + (f" of type {pat}" if pat else ""))
+    if verb == "count":
+        pat = params.get("of", params.get("type", ""))
+        flt = f" if o.type == {pat.upper()!r}" if pat else ""
+        return (f"import bpy\n"
+                f"result = len([o for o in bpy.data.objects{flt}])",
+                f"counted objects" + (f" of type {pat}" if pat else ""))
+    raise ValueError(f"unknown gear verb '{verb}'")
+
+
 def vehicle_key(name):
     _seed_vehicles()
     cardp, card = _vehicle_card(name)
@@ -637,20 +851,39 @@ def vehicle_drive(app, src):
     cardp, card = _vehicle_card(app)
     meta = _card_meta(card) if card else {}
     driver = meta.get("driver", "ladder")
-    if driver == "console":
+
+    def console_lines(bpy_src):
+        """Run bpy src against the live cockpit or headless. Returns (lines, status)."""
         if _bpy_live():
-            data, err = _bpy_task(src)
+            data, err = _bpy_task(bpy_src)
             if err:
-                return report([err], status="error")
-            return report([f"cockpit reply ({app}):", json.dumps(data)[:MAX_OUT]])
+                return [err], "error"
+            return [f"cockpit reply ({app}):", json.dumps(data)[:MAX_OUT]], "ok"
         binary = meta.get("binary")
         if binary and os.path.isfile(binary):
-            wrapped = src
-            if re.search(r"\bresult\s*=", src):
+            wrapped = bpy_src
+            if re.search(r"\bresult\s*=", bpy_src):
                 wrapped += "\nprint('RESULT: ' + repr(result))"
-            return report([sh(f"{shlex.quote(binary)} --background --factory-startup --python-expr {shlex.quote(wrapped)}", timeout=180)])
-        return report([f"card says console but the 'binary:' line is missing or not a real path — fix {cardp}"],
-                      status="error")
+            return [sh(f"{shlex.quote(binary)} --background --factory-startup --python-expr {shlex.quote(wrapped)}", timeout=180)], "ok"
+        return [f"card says console but the 'binary:' line is missing or not a real path — fix {cardp}"], "error"
+
+    if driver == "console":
+        verb, primary, params, rest = _gear_parse(src)
+        if verb in _GEAR_VERBS:
+            try:
+                bpy_src, note = _gear_blender(verb, primary, params, rest)
+            except ValueError as exc:
+                return report([f"gearbox: {exc}",
+                               f"verbs: {', '.join(_GEAR_VERBS)}   (e.g. `drive {app} -- add cube size=2 color=red name=KeyCube`)",
+                               "or free-form bpy if the gearbox can't express it."], status="error")
+            lines, st = console_lines(bpy_src)
+            return report([note] + lines, st)
+        if "bpy" in src or '\n' in src or src.startswith(("import ", "from ")):
+            lines, st = console_lines(src)
+            return report(lines, st)
+        return report([f"'{verb}' is not a gear verb — verbs: {', '.join(_GEAR_VERBS)}",
+                       "vibe it with slots, e.g. `drive Blender -- add cube size=2 color=red at=0,0,1`",
+                       "or raw bpy for power use."], status="error")
     if driver == "osascript":
         return app_do(app, src)
     return report([f"{app} has no scriptable door (card driver: {driver}) — use the ladder:",

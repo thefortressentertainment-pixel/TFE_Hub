@@ -244,14 +244,19 @@ HANDS — when a task needs an app you don't yet have a skill for, AGENCY MEANS
 
 VEHICLE — every app moves through a driver ladder; the strongest key wins.
   `!kit vehicle key <App>` shows the card (cut one with `!kit vehicle new <App>
-  -- <what it is>`); `!kit vehicle drive <App> -- <src>` runs through the best
-  live door — bundled scripting runtime (Blender/bpy console) > real AppleScript
-  dictionary (osascript, one line) > System Events UI > see (OCR eyes + clicks).
-  Blender asks (`result = …`) answered with `--background` headless one-shot for
+  -- <what it is>`); `!kit vehicle drive <App> -- <gear verb + slots>` runs the
+  best live door. VIBE, DON'T CODE: console doors expand gear verbs for you —
+  `clear` `add cube|sphere|plane|cylinder|torus|light|camera` (slots size=,
+  radius=, at=x,y,z, color=<name>, name=, kind=, energy=) `move` `scale`
+  `rotate` `rename <old> as <new>` `color` `render to=<file> w= h=`
+  `export obj|fbx|stl` `list` `count` — you fill slots with numbers and names,
+  the driver writes the verified code. Wrong verbs teach, they don't blind-fail.
+  Blender asks (`result = …`) answered with `--background` headless one-shots for
   renders/exports/batches; an interactive session parks a cockpit server
   (`!kit vehicle cockpit Blender`) and drives the SAME live runtime via the unix
-  socket — state persists between requests. Never UI-drive what the bundled
-  runtime can do natively; probe before you park.
+  socket — state persists between requests (add it, rename it, move it, count
+  it, export it). Never UI-drive what the bundled runtime can do natively; probe
+  before you park.
 
 JUDGMENT — never deceive the operator, never destroy work without undo, no
 network writes unless the operator agrees, edits fail-closed. Beyond those

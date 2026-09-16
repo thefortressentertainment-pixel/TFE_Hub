@@ -31,6 +31,12 @@ one `!kit` line; the cabinet stays small so the model never thrashes choosing.
 
 - Help: `python3 /Users/tfe/fortress-hub/jarv/toolkit.py` (prints the map).
 - `act edit path before after` is fail-closed: anchor must occur exactly once.
+- `vehicle drive <App> -- <verb> <slots>`: VIBE, DON'T CODE on console doors —
+  `add cube size=2 at=0,0,1 color=red name=KeyCube`, `move`/`scale`/`rotate`,
+  `rename X as Y`, `color`, `render to=file.png w= h=`, `export obj|fbx|stl`,
+  `list`/`count`. Unknown verbs teach the verb list. Raw bpy/AppleScript still
+  works for power use. A parked cockpit (`vehicle cockpit <App>`) makes every
+  drive a slice into ONE live app — state persists across requests.
 - `sense fs <path> <n>` caps output; `sense fetch <url> <maxchars>` caps the web.
 - `mem save key text` is for facts worth keeping across sessions.
 - `mem lesson <topic> -- <lesson>` records a real learned lesson; `mem lessons`

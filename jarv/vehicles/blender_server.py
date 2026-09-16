@@ -23,7 +23,6 @@ import json
 import os
 import socket
 import sys
-import threading
 import traceback
 
 SOCK = os.path.expanduser("~/.jarv/vehicles/blender.sock")
@@ -39,9 +38,9 @@ def _serve(conn):
         except Exception:
             conn.sendall(json.dumps({"err": "bad request"}).encode())
             return
+        # bpy's Context is MAIN-THREAD ONLY: we exec inline on Blender's main
+        # thread (requests serialize — correct for a single-writer app runtime).
         out = []
-        buf = sys.stdout
-        sys.stdout = sys.__stdout__
         try:
             g = {"bpy": __import__("bpy"), "__builtins__": __builtins__}
             sys.stdout.flush()
@@ -50,8 +49,6 @@ def _serve(conn):
             conn.sendall(json.dumps({"ok": repr(result)[:8000]}).encode())
         except Exception:
             conn.sendall(json.dumps({"err": traceback.format_exc()[-8000:]}).encode())
-        finally:
-            pass
     finally:
         try:
             conn.close()
@@ -89,7 +86,7 @@ def main():
             continue
         except OSError:
             break
-        threading.Thread(target=_serve, args=(conn,), daemon=True).start()
+        _serve(conn)
 
 
 if __name__ == "__main__":

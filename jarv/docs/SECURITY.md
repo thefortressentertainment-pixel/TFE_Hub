@@ -131,11 +131,25 @@ or an adversarial AI engagement.
   download then run) is auto-queued and never runs until the operator types
   `/ok` in the live terminal — inbound artifacts never drive actions unprompted.
 - Self-surgery is gated: any command text — `!write` or a shell (`!exec`,
-  `!kit`) reach into `jarv/ide.py`, `jarv/toolkit.py`, or `jarv/vault.py` (full
-  or repo-relative path) — is queued for the operator's explicit `/ok` and
-  nothing else can run it; an empty-body write is refused outright (it would
-  truncate its target). JARV can improve itself but can never amputate itself
-  in one blind stroke.
+  `!kit`) — that reaches into `ide.py`, `toolkit.py`, or `vault.py` is queued for
+  the operator's explicit `/ok` and nothing else can run it; an empty-body write
+  is refused outright (it would truncate its target). This covers BOTH copies of
+  the engine: the live sources under `jarv/` and the decrypted payload the IDE
+  actually runs from (`~/.jarv/vault/run/`). A bare filename next to a shell
+  mutator (`echo … >> jarv/ide.py`, `cp x ide.py`, `sed -i … toolkit.py`) is
+  caught too, and only genuinely read-only cabinet routes are exempt — `skill
+  run` executes code, so it is not one of them. JARV can improve itself but can
+  never amputate itself in one blind stroke.
+- The session token is bound to the launcher process: it records the pid of the
+  `vault.py` that unlocked the vault, and `auth_ok()` accepts it only while that
+  process is still alive and is JARV's own parent. A token left behind by a
+  crashed, killed, or window-closed run — the failure that stranded a live token
+  on 2026-09-15 — or a copy replayed by hand later, arms nothing.
+- The vault keeps one previous generation (`jarv.vault.prev`), and `unlock()`
+  seals the live sources BEFORE extracting them. So the payload the IDE runs is
+  the payload that is actually in the vault (no "fixed it, nothing changed"
+  one-launch lag), and `vault.py recover --prev` is a real recovery net if the
+  last unlock sealed a broken engine.
 - The app hand (AppleScript / System Events) is bounded by macOS
   Accessibility and Apple Events permissions, which only the operator can grant
   in System Settings. `!kit app probe` reads BEFORE anything is touched, and a

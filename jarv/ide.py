@@ -45,43 +45,83 @@ TOKEN_TTL = 12 * 3600
 
 
 def auth_ok():
-    """True only when the password-unlocked launcher seeded a live session token."""
+    """True only when the password-unlocked launcher seeded a live session token
+    AND that launcher process is still running us. The token names the launcher's
+    pid, so one left behind by a crashed / killed / window-closed run — or
+    replayed by hand later — arms nothing."""
     try:
         if not os.path.isfile(TOKEN):
             return False
         if time.time() - os.path.getmtime(TOKEN) > TOKEN_TTL:
             return False
         with open(TOKEN) as fh:
-            tok = fh.read().strip()
-        return len(tok) == 64 and tok.isalnum()
+            parts = fh.read().split()
+        if len(parts) != 2:
+            return False
+        tok, pid = parts
+        if len(tok) != 64 or not tok.isalnum():
+            return False
+        return _live_launcher(int(pid))
     except Exception:
         return False
 
+
+def _live_launcher(pid):
+    """The token is good only while the launcher that wrote it is alive, is our
+    parent, and is the vault launcher itself."""
+    if pid != os.getppid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    try:
+        r = subprocess.run(["ps", "-ww", "-p", str(pid), "-o", "command="],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:
+        return False
+    return "vault.py" in r.stdout
+
+
 ALLOW = None  # FULL MACHINE: the entire Mac + shell is the sandbox. No allowlist.
 
-# JARV's own engine. Writing over these in one blind stroke would amputate the
-# IDE itself — any `!write` targeting them is queued for the operator's /ok.
+# JARV's own engine. It RUNS from the decrypted payload under the vault
+# (~/.jarv/vault/run) while the live sources sit in the repo — both copies are
+# the engine, and a command naming either one is self-surgery.
+_LIVE_CORE = os.path.realpath(os.path.join(REPO, "jarv"))
 SELF_CORE = frozenset(
-    os.path.realpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), f))
+    os.path.realpath(os.path.join(base, f))
+    for base in (HERE, _LIVE_CORE)
     for f in ("ide.py", "toolkit.py", "vault.py")
 )
-# Any command text (exec, kit, write) naming a self-core file — full path or
-# repo-relative — is treated as self-surgery and queued for the operator's /ok.
+# Any command text (exec, kit, write) naming a self-core file — full path,
+# repo-relative, or a bare filename beside a shell mutator ("cp x ide.py",
+# "echo … >> jarv/vault.py") — is treated as self-surgery and queued for /ok.
 SELF_CORE_NAMES = frozenset(
     sp for _p in SELF_CORE
-    for sp in (_p, os.path.relpath(_p, REPO))
+    for sp in (_p, os.path.relpath(_p, REPO), "jarv/" + os.path.basename(_p))
 )
+_SELF_CORE_BARE = ("ide.py", "toolkit.py", "vault.py")
+_MUTATORS = (" >", ">>", "tee ", "sed -i", "mv ", "cp ", "rm ", "chmod ",
+             "truncate ", "dd ", "patch ", "perl -i", "install ", "ln ")
 
 
 def self_core_hit(text):
-    return next((sp for sp in SELF_CORE_NAMES if sp in text), None)
+    hit = next((sp for sp in SELF_CORE_NAMES if sp in text), None)
+    if hit:
+        return hit
+    if any(b in text for b in _SELF_CORE_BARE) and any(m in text for m in _MUTATORS):
+        return "self-core-file"
+    return None
 
 
 # Read-only cabinet routes never mutate the engine; anything else that names a
 # core file is gated. Fail-closed: unknown subcommands count as mutators.
+# NB no `skill run` here: running a skill pack executes code, so it is not a
+# read-only route.
 _KIT_READ_OK = ("sense ", "sys ", "mem recall ", "mem lessons ", "mem timeline ",
                 "secur scan", "secur status", "secur list", "app probe ",
-                "skill list", "skill run ", "build status", "build check")
+                "skill list", "build status", "build check")
 
 
 def is_read_kit(text):
@@ -175,6 +215,15 @@ HANDS — when a task needs an app you don't yet have a skill for, AGENCY MEANS
   missing, tell the operator the exact System Settings path and continue the
   moment it's granted. Working inside an app the operator named is a skill to be
   learned, never an excuse for a dead end.
+  A skill pack is ONLY for an app installed on this Mac — probe before you
+  scaffold, and if `!kit skill new` reports the app is not installed, STOP: you
+  invented a target. Pick a real app or ask which one. Building software (a
+  system, a script, an app of your own) is NOT a skill — write the code into the
+  repo project; never scaffold a phantom 'app'. Likewise, `!kit skill new` is a
+  contract: read the scaffold it just created, then WRITE the real AppleScript
+  ACTIONS into skill.py (a plain !write under ~/.jarv/skills, one action at a
+  time), then test each with `!kit skill run <app> -- <action>` until the task
+  works end to end. Scaffold-babble is a flop, not delivery.
 
 JUDGMENT — never deceive the operator, never destroy work without undo, no
 network writes unless the operator agrees, edits fail-closed. Beyond those
@@ -353,6 +402,26 @@ def save_session(path, meta, turns):
             fh.write(json.dumps(m, ensure_ascii=False) + "\n")
 
 
+def _engine_health():
+    """Startup self-audit: the three engine files must compile. A corrupted or
+    half-written engine is caught at launch, not mid-task. Returns None or a
+    short warning line."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    bad = []
+    for f in ("ide.py", "toolkit.py", "vault.py"):
+        p = os.path.join(here, f)
+        if not os.path.isfile(p):
+            bad.append(f"{f} (missing)")
+            continue
+        r = subprocess.run([sys.executable, "-m", "py_compile", p],
+                           capture_output=True, text=True, timeout=20)
+        if r.returncode != 0:
+            bad.append(f)
+    if not bad:
+        return None
+    return f"engine check FAILED: {', '.join(bad)} — run !kit sys self before working"
+
+
 def banner(name, model_key, cwd, turns, op=None):
     n = sum(1 for m in turns if m["role"] == "user")
     w = BUDGET[model_key]
@@ -363,6 +432,9 @@ def banner(name, model_key, cwd, turns, op=None):
     print(f"  cwd     {cwd}")
     print(f"  budget  ~{w}t · /h for commands · ctrl-c cancels a turn")
     print(f"  {op_line}")
+    warn = _engine_health()
+    if warn:
+        print(f"  ⚠ {warn}")
     print("─" * 44 + "\n")
 
 
@@ -396,7 +468,7 @@ def main():
     is_arch = "--arch" in args
     fresh = "--new" in args
     name = "main"
-    if "-n" in args:
+    if "-n" in args and args.index("-n") + 1 < len(args):
         name = args[args.index("-n") + 1]
 
     os.makedirs(SESS_DIR, exist_ok=True)
@@ -418,7 +490,7 @@ def main():
     if AUTH:
         print("  \x1b[32mgate: armed — live password session · tools enabled\x1b[0m")
     else:
-        print("  \x1b[31mgate: LOCKED — chat only · zero tool function. Unlock via the encrypted launcher (JARV Vibe.command → password).\x1b[0m")
+        print("  \x1b[31mgate: LOCKED — chat only · zero tool function. Open JARV.app (or `python3 jarv/vault.py`) → password.\x1b[0m")
     contam = False          # True once inbound (web) content entered context
     pending = None          # tool lines queued while contam, awaiting EXACTLY /ok
     approved = False        # set ONLY by an explicit /ok in this live terminal
@@ -668,10 +740,11 @@ def main():
 
             if body_lines and body_lines[-1].strip():
                 finish = "\n".join(body_lines).strip()
-            if not acted or finish:
+            if pending or not acted or finish:
                 if finish:
                     print("\n\033[2K\rmodel> " + finish)
-                break
+                    turns.append({"role": "assistant", "content": finish})
+                break        # yields to input(): a queued step waits on the operator's /ok
             print()
 
         save_session(path, {"model": model_key, "cwd": cwd}, turns)

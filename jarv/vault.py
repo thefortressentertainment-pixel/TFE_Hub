@@ -20,6 +20,7 @@ Usage:
     python3 jarv/vault.py launch          # first key flow: set-pw once, then unlock
     python3 jarv/vault.py changepass      # re-key with a NEW password (old pw required)
     python3 jarv/vault.py reseal          # re-encrypt from current jarv/ (old pw)
+    python3 jarv/vault.py recover [--prev] # unpack a snapshot (no reseal)
     python3 jarv/vault.py check           # is a vault present?
 
 The vault is a SINGLE file (jarv.vault): magic, salt, IV, HMAC tag, sealed-time
@@ -38,6 +39,7 @@ import hmac
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import tarfile
@@ -48,6 +50,7 @@ PAYLOAD_DIR = os.path.join(REPO, "jarv")
 VAULT_DIR = os.path.expanduser("~/.jarv/vault")
 VAULT_FILE = os.path.join(VAULT_DIR, "jarv.vault")
 META_FILE = os.path.join(VAULT_DIR, "meta.json")
+PREV_FILE = os.path.join(VAULT_DIR, "jarv.vault.prev")  # previous generation = recovery net
 RUN_DIR = os.path.join(VAULT_DIR, "run")
 MAGIC = "JARV2"
 MAGIC_LEGACY = "JARV1"
@@ -60,10 +63,11 @@ SESSION_TOKEN = os.path.join(VAULT_DIR, "session-token")
 def _write_token():
     """Seed the live-session credential. ide.py returns ZERO tool function
     without a fresh token — it exists only after a successful password unlock
-    here, in this terminal, and is removed when the IDE exits."""
+    here, in this terminal, and it records THIS launcher's pid, so a token left
+    behind by a crashed or killed run can never arm a later session."""
     os.makedirs(VAULT_DIR, exist_ok=True)
     with open(SESSION_TOKEN, "w") as fh:
-        fh.write(secrets.token_hex(32))
+        fh.write(f"{secrets.token_hex(32)} {os.getpid()}")
     os.chmod(SESSION_TOKEN, 0o600)
 
 
@@ -73,6 +77,30 @@ def _drop_token():
             os.remove(SESSION_TOKEN)
         except OSError:
             pass
+
+
+def _tidy():
+    """Leave nothing unlocked behind: no session token, no decrypted payload."""
+    _drop_token()
+    _wipe_run()
+
+
+def _on_fatal(signum, _frame):
+    """SIGHUP (the Terminal window was closed) / SIGTERM: the IDE dies with us,
+    so the unlocked payload and the session token must never outlive the run."""
+    _tidy()
+    sys.exit(128 + signum)
+
+
+def _install_exit_guard():
+    """Ctrl-C is deliberately NOT trapped — it belongs to the IDE (cancel a
+    turn). Only the fatal no-cleanup paths need the guard."""
+    for sig in (signal.SIGHUP, signal.SIGTERM):
+        try:
+            signal.signal(sig, _on_fatal)
+        except (ValueError, OSError):
+            pass
+
 
 _PACK = ("ide.py", "toolkit.py", "docs", "JARV.md")
 
@@ -156,6 +184,10 @@ def _write_v2(rec: dict):
         fh.write(json.dumps(rec, separators=(",", ":")).encode())
         fh.flush()
         os.fsync(fh.fileno())
+    try:
+        os.chmod(tmp, 0o600)
+    except OSError:
+        pass
     os.replace(tmp, VAULT_FILE)
     try:
         os.fsync(os.open(VAULT_DIR, os.O_DIRECTORY))
@@ -168,15 +200,15 @@ def _write_v2(rec: dict):
             pass
 
 
-def _read_v2() -> dict:
-    with open(VAULT_FILE) as fh:
+def _read_v2(path: str = VAULT_FILE) -> dict:
+    with open(path) as fh:
         rec = json.load(fh)
     if rec.get("magic") != MAGIC:
         raise ValueError("not a JARV2 vault")
     return rec
 
 
-def _read_sealed() -> tuple:
+def _read_sealed(path: str = VAULT_FILE) -> tuple:
     """Return (salt, iv, tag, cipher) from whichever format is on disk."""
     state = _file_state()
     if state == "v1":
@@ -188,7 +220,7 @@ def _read_sealed() -> tuple:
         return (bytes.fromhex(meta["salt"]), bytes.fromhex(meta["iv"]),
                 meta["tag"], cipher)
     if state == "v2":
-        rec = _read_v2()
+        rec = _read_v2(path)
         return (bytes.fromhex(rec["salt"]), bytes.fromhex(rec["iv"]),
                 rec["tag"], base64.b64decode(rec["cipher"]))
     raise ValueError("no vault present")
@@ -197,10 +229,21 @@ def _read_sealed() -> tuple:
 # ── vault operations ───────────────────────────────────────────────────────────
 
 def seal(password: str, wipe: bool = True) -> int:
-    """Encrypt the current jarv/ payload into the vault (single atomic file)."""
+    """Encrypt the current jarv/ payload into the vault (single atomic file).
+
+    The generation being replaced is kept as jarv.vault.prev, so the recovery
+    net survives one bad live edit (a self-surgery accident) rather than being
+    overwritten by it."""
     os.makedirs(VAULT_DIR, exist_ok=True)
     if wipe:
         _wipe_run()
+    if os.path.isfile(VAULT_FILE):
+        try:
+            with open(VAULT_FILE, "rb") as src, open(PREV_FILE, "wb") as dst:
+                dst.write(src.read())
+            os.chmod(PREV_FILE, 0o600)
+        except OSError:
+            pass
     salt = secrets.token_bytes(16)
     iv = secrets.token_bytes(16)
     key = _derive_key(password, salt)
@@ -217,11 +260,11 @@ def seal(password: str, wipe: bool = True) -> int:
     return len(cipher)
 
 
-def _decrypt(password: str):
+def _decrypt(password: str, path: str = VAULT_FILE):
     """Verify + decrypt the stored payload. Returns bytes, or None on any
     mismatch (wrong password / tampered vault). Never touches the vault."""
     try:
-        salt, iv, tag, cipher = _read_sealed()
+        salt, iv, tag, cipher = _read_sealed(path)
         key = _derive_key(password, salt)
         if not hmac.compare_digest(hmac.new(key, cipher, hashlib.sha256).hexdigest(),
                                    tag):
@@ -238,12 +281,20 @@ def unlock(password: str) -> bool:
     if blob is None:
         return False
     try:
+        # SEAL FIRST, then extract: the payload the IDE runs is the payload that
+        # is actually in the vault. Extracting first ran the *previous*
+        # generation's code, so a fix to the engine (or to self-surgery by JARV
+        # itself) only took effect one launch later — the classic "I fixed it and
+        # nothing changed" symptom.
+        try:
+            seal(password, wipe=False)
+            fresh = _decrypt(password)
+            if fresh is not None:
+                blob = fresh
+        except Exception as e:
+            print(f"  [warning] vault reseal skipped ({e}) — running the stored payload")
         os.makedirs(RUN_DIR, exist_ok=True)
         _unpack_payload(blob)
-        try:  # keep the vault in sync with the live jarv/ sources each open
-            seal(password, wipe=False)
-        except Exception:
-            pass
         return True
     except Exception:
         return False
@@ -254,7 +305,7 @@ def prompt_password(prompt="JARV password: ") -> str:
     or the .app which opens it). Any non-terminal environment — cron, a stray
     script, piping — gets a clear message and a clean exit, never a GUI popup."""
     if not sys.stdin.isatty():
-        print("\nJARV must be opened from Terminal (double-click 'JARV Vibe.command').\n"
+        print("\nJARV must be opened from an interactive terminal (double-click JARV.app).\n"
               "No interactive terminal attached — aborting.")
         sys.exit(3)
     import getpass
@@ -263,8 +314,8 @@ def prompt_password(prompt="JARV password: ") -> str:
 
 # ── commands ────────────────────────────────────────────────────────────────
 
-def cmd_launch():
-    args = sys.argv[3:]
+def cmd_launch(argv=None):
+    args = list(argv if argv is not None else sys.argv[2:])
     _wipe_run()
     _drop_token()
     if not vault_present():
@@ -296,14 +347,25 @@ def cmd_launch():
         _write_token()
         print("  unlocked. starting JARV…\n")
     os.chdir(RUN_DIR)
-    p = subprocess.run([sys.executable, os.path.join(RUN_DIR, "ide.py")] + args)
-    _drop_token()
-    _wipe_run()
+    _install_exit_guard()  # window closed / killed → nothing stays unlocked
+    proc = subprocess.Popen([sys.executable, os.path.join(RUN_DIR, "ide.py")] + args)
+    while True:
+        try:
+            rc = proc.wait()
+            break
+        except KeyboardInterrupt:
+            # Ctrl-C belongs to the IDE (it cancels a turn); the launcher keeps
+            # waiting so an unlocked session is never torn down mid-cancel.
+            if proc.poll() is None:
+                continue
+            rc = proc.returncode
+            break
+    _tidy()
     print("  vault re-locked.")
-    sys.exit(p.returncode)
+    sys.exit(rc)
 
 
-def cmd_changepass():
+def cmd_changepass(argv=None):
     """Re-key the vault with a NEW password. Proves the current one first
     (same attempt cooling as launch), so a vault can only be re-keyed by
     someone who knows the password that is already in it."""
@@ -333,18 +395,24 @@ def cmd_changepass():
     _wipe_run()
 
 
-def cmd_recover():
+def cmd_recover(argv=None):
     """DISASTER RECOVERY: unlock + unpack the sealed payload to
     ~/.jarv/vault-recover-<stamp>/ WITHOUT resealing the vault. The vault is
     never written — safe even when the live jarv/ sources are damaged, so a
-    damaged live dir can never poison the stored payload."""
-    if not vault_present():
-        print("no vault yet — first open of the launcher seals it"); sys.exit(1)
+    damaged live dir can never poison the stored payload.
+
+    `recover` uses the current vault; `recover --prev` uses the generation
+    before it (jarv.vault.prev) — the net for "the last unlock sealed a
+    broken engine"."""
+    prev = "--prev" in list(argv or [])
+    src = PREV_FILE if prev else VAULT_FILE
+    if not os.path.isfile(src):
+        print(f"no {'previous ' if prev else ''}vault present"); sys.exit(1)
     waits = 0
     blob = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         old = prompt_password(f"  current JARV password (attempt {attempt}):  ")
-        blob = _decrypt(old)
+        blob = _decrypt(old, src)
         if blob is not None:
             break
         waits += LOCKOUT_DELAY * attempt
@@ -362,11 +430,11 @@ def cmd_recover():
                if not os.path.exists(os.path.join(dest, n))]
     if missing:
         print(f"[warning] payload missing {missing} — vault may be partial")
-    print(f"  recovered payload → {dest}")
+    print(f"  recovered {'previous ' if prev else ''}payload → {dest}")
     print("  (the vault itself was NOT rewritten; nothing was resealed)")
 
 
-def cmd_reseal():
+def cmd_reseal(argv=None):
     if not vault_present():
         print("no vault yet — first open of the launcher seals it"); sys.exit(1)
     old = prompt_password("  current password: ")
@@ -376,18 +444,40 @@ def cmd_reseal():
     _wipe_run()
 
 
-def cmd_check():
+def cmd_check(argv=None):
     state = _file_state()
     if state == "none":
         print("vault absent"); return
     try:
         _read_sealed() if state == "v1" else _read_v2()
         print("vault present — format ok")
+        print(f"previous generation: {'present (recover --prev)' if os.path.isfile(PREV_FILE) else 'none yet'}")
     except Exception as e:
         print(f"vault present — CORRUPTED ({e})")
 
 
+COMMANDS = {
+    "launch": cmd_launch, "changepass": cmd_changepass, "reseal": cmd_reseal,
+    "recover": cmd_recover, "check": cmd_check,
+}
+
+
+def main(argv=None):
+    """argv is everything after the script name. `vault.py` and `vault.py launch`
+    mean the same thing, and IDE flags pass straight through, so
+    `vault.py --arch` and `vault.py launch -n work` both work."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    name = argv[0] if argv else "launch"
+    if name.startswith("-"):
+        return cmd_launch(argv)
+    fn = COMMANDS.get(name)
+    if fn is None:
+        print(f"unknown command {name!r}\n"
+              "usage: vault.py [launch|changepass|reseal|recover|check] "
+              "[--arch|-n NAME|--new]")
+        sys.exit(2)
+    return fn(argv[1:])
+
+
 if __name__ == "__main__":
-    cmd = sys.argv[1] if len(sys.argv) > 1 else "launch"
-    {"launch": cmd_launch, "changepass": cmd_changepass,
-     "reseal": cmd_reseal, "recover": cmd_recover, "check": cmd_check}[cmd]()
+    main()

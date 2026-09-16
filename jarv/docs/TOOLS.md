@@ -11,8 +11,10 @@ one `!kit` line; the cabinet stays small so the model never thrashes choosing.
     build   status|check                  repo hygiene + verification
     arch    init|slice|result|list|show|collect|close   single-agent workbench
     sys     ps|ctx                        resident models + local footprint
-    app     probe|ui|do|keys              the hand — drive ANY app on this Mac
+    app     find|probe|ui|do|keys         the hand — drive ANY app on this Mac
                                           (AppleScript + System Events accessibility)
+    see     screen|app|click|text         the eyes — screenshot + Vision OCR any
+                                          screen or app window, then click it
     skill   new|list|run                  buy the missing tool: scaffold a skill
                                           pack in ~/.jarv/skills/<app>/ and iterate
     secur   scan|report|list              the swivel: detect, log, notify
@@ -36,6 +38,11 @@ one `!kit` line; the cabinet stays small so the model never thrashes choosing.
 
 ## The hand (app + skill)
 
+- `app find <whatever the operator said>` resolves a loose name to the real
+  bundle ("ace browser" → Ace, "terminal" → Terminal) and reports a miss with
+  near-miss candidates. Run it whenever the operator names an app loosely;
+  pass its result (or their exact words) to probe/ui/do/keys — every app verb
+  resolves through the same path.
 - `app probe <App>` first — always. Read-only recon: bundle, scripting
   dictionary (`sdef`), accessibility permission, running state. Never touch an
   app before probing it.
@@ -50,6 +57,50 @@ one `!kit` line; the cabinet stays small so the model never thrashes choosing.
   `skill run <app> -- <action>` tests it. No engine recompile — a skill is just
   a script JARV extends one action at a time. If JARV lacks the tool for a task,
   agency means it builds the skill, tests it, and then does the task.
+
+## The eyes (see)
+
+- The hand (AppleScript) works when an app exposes a UI tree; many creative
+  apps (Blender, games, canvas apps) expose almost nothing — their interface is
+  pixels. `see` gives JARV sight over them: it screenshots, OCRs with Vision,
+  and reports every text with its pixel rect.
+- `see screen` looks at the whole screen; `see app <App>` activates the app,
+  captures its front window, and OCRs just that. Read the rects — they are
+  screen coordinates you can act on.
+- `see click <x> <y> [right|double]` presses at raw coordinates;
+  `see text <words-on-screen>` is the usual move: OCR the screen, find the
+  label, click its centre (eyes then hands).
+- The loop for a pixel-app task: `see app <App>` → decide from what you see →
+  `see text <label>` or `see click x y` → `see app <App>` again to verify the
+  result. Sight verifies action; never assume a click landed without looking.
+- Menus often read better than windows: OCR picks up the menu bar too
+  (File/Edit/Render/Help). `app keys` still fires shortcuts that bypass the
+  pointer entirely — prefer shortcuts when the label is stable.
+- Screenshots land in `~/.jarv/screens/` (timestamped), so a run leaves its own
+  visual log. Screen-recording permission is operator-granted: if captures come
+  back empty/black, name the exact System Settings → Privacy & Security →
+  Screen Recording path, add the terminal/python3, then retry.
+
+## The eyes (see: screenshot → OCR → click)
+
+The UI-tree verbs above only reach apps that expose accessibility elements.
+`see` gives JARV pixel eyes for everything else (Blender, games, any canvas):
+
+- `see screen` — capture the whole screen and OCR it. Output rows are
+  `x,y WxH  text`: the top-left and size of each text run in screen
+  coordinates. Those numbers are click targets.
+- `see app <App>` — same, but activate the app and capture only its front
+  window (coordinates are screen-absolute, so clicking works unchanged).
+- `see click <x> <y> [right|double]` — synthetic mouse at screen coordinates
+  straight from the OCR rows.
+- `see text <visible label>` — OCR the live screen, find that text, click its
+  center. Click by what you can read, not by remembered coordinates: look,
+  click, look again. This is the loop for apps with no scripting dictionary.
+
+The loop is always: `see screen` (or `see app`) → pick a row → `see click` /
+`see text` → `see screen` again to verify the change. Confirm with your eyes
+after every touch; never chain blind clicks on a changed screen.
+Screens are kept under `~/.jarv/screens/` for reference after the turn.
 
 ## Trust boundaries (full machine + internet, hard-gated)
 

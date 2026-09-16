@@ -1,0 +1,64 @@
+#!/bin/bash
+# JARV.app — the launcher the desktop icon runs.
+#
+# Double-clicking the icon opens the encrypted Terminal IDE. The vault reads its
+# password from a TTY, and a Finder-launched app has none, so this hands the
+# work to Terminal.app instead of trying to prompt from here.
+#
+# The bundle records where the checkout and the interpreter were at build time
+# (Contents/Resources/repo-path, python-path). If the checkout has moved we look
+# in the usual places and say so in a dialog, rather than bouncing silently.
+set -u
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"    # …/JARV.app/Contents/MacOS
+RES="$(cd "$HERE/../Resources" && pwd)"                 # …/JARV.app/Contents/Resources
+
+alert() {   # a real dialog beats a silent bounce
+  osascript -e "display alert \"JARV\" message \"$1\" as critical" >/dev/null 2>&1
+}
+
+read_res() { [ -f "$1" ] && head -1 "$1" | tr -d '\r\n' || true; }
+
+REPO="$(read_res "$RES/repo-path")"
+PY="$(read_res "$RES/python-path")"
+
+if [ ! -f "$REPO/jarv/vault.py" ]; then      # moved? hunt for the checkout
+  for cand in "$HOME/fortress-hub" "$HOME/Developer/fortress-hub" \
+              "$HOME/Documents/fortress-hub" "$HOME/src/fortress-hub" \
+              "$HOME/Projects/fortress-hub"; do
+    if [ -f "$cand/jarv/vault.py" ]; then REPO="$cand"; break; fi
+  done
+fi
+if [ ! -f "$REPO/jarv/vault.py" ]; then
+  alert "Could not find the fortress-hub checkout.\n\nLooked at: $RES/repo-path\nRebuild with: jarv/launcher/build-app.sh"
+  exit 1
+fi
+
+case "$PY" in /*) ;; *) PY="";; esac          # only trust an absolute path here
+if [ ! -x "$PY" ]; then PY="$(command -v python3 || true)"; fi
+if [ ! -x "$PY" ]; then
+  alert "No python3 found.\n\nInstall Python 3.12 or newer, then rebuild:\njarv/launcher/build-app.sh"
+  exit 1
+fi
+
+# Write the runner fresh on every launch (paths can change) into JARV's own state
+# dir, so nothing is littered in /tmp and the operator can re-run it by hand.
+RUNNER="$HOME/.jarv/JARV Vibe.command"
+mkdir -p "$HOME/.jarv"
+cat > "$RUNNER" <<RUNNER_EOF
+#!/bin/bash
+# Written by JARV.app at launch — edit jarv/launcher/jarv-launcher instead.
+cd "$REPO" || exit 1
+exec "$PY" jarv/vault.py launch
+RUNNER_EOF
+chmod +x "$RUNNER"
+
+# `.command` files are what Terminal executes on double-click; -a Terminal makes
+# that explicit even if another app claims the extension.
+if ! open -a Terminal "$RUNNER" 2>/dev/null; then
+  osascript -e 'tell application "Terminal" to activate' \
+            -e "tell application \"Terminal\" to do script \"exec bash '$RUNNER'\"" \
+            >/dev/null 2>&1 \
+    || alert "Could not open Terminal.\n\nRun it by hand:\nbash \"$RUNNER\""
+fi
+exit 0

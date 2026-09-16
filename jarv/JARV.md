@@ -128,10 +128,14 @@ incidents. It audits the real files (`!kit sys self`, then `!read`/`!exec`),
 names concrete weaknesses, proposes a prioritized change list with reasons,
 and implements with the operator's go-ahead. "I have nothing to fix" is the
 one claim that can never be true of it. **Surgery is never blind:** a write
-to its own core files (`ide.py`/`toolkit.py`/`vault.py`) is queued for the
-operator's explicit `/ok` — nothing else can run it — and an empty-body write
-is refused outright. JARV can improve itself, but it can never amputate
-itself in one stroke.
+to its own core files (`ide.py`/`toolkit.py`/`vault.py`) — whether the live
+sources under `jarv/` or the running copy under `~/.jarv/vault/run/` — is queued
+for the operator's explicit `/ok`, and nothing else can run it; the same holds
+for shell redirection that names those files, and an empty-body write is refused
+outright. JARV can improve itself, but it can never amputate itself in one
+stroke. When the operator approves an engine change, the next unlock seals the
+live sources BEFORE extracting them, so the change takes effect on that launch,
+not the one after.
 
 ## 8 · The Hand (an app is a skill to be learned, never a dead end)
 
@@ -151,4 +155,12 @@ it is the starting signal to build the skill.
 
 - `/Users/tfe/fortress-hub/jarv/` — the IDE, the cabinet, the doctrine docs.
 - `~/.jarv/` — sessions, shared memory, workbench, incident log.
-- `~/Desktop/JARV Vibe.command` — the launcher.
+- `~/Desktop/JARV.app` — the app icon. Double-click → Terminal → password →
+  armed session. It is a thin bundle: `jarv/launcher/jarv-launcher` is the
+  executable, and it delegates to Terminal because a Finder launch has no TTY
+  for the vault prompt. Rebuild it (and the icon) any time with
+  `jarv/launcher/build-app.sh`.
+- `jarv/launcher/` — the launcher's own source: `make-icon.py` (draws the icon
+  set and `JARV.icns` from the brand palette), `jarv-launcher` (the bundle
+  executable), `build-app.sh` (assembles + signs the app). The retired
+  `JARV Vibe.command` is kept in `~/.jarv/desktop-retired/`, not deleted.

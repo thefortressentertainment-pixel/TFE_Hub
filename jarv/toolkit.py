@@ -15,7 +15,7 @@ JARV ONE plain-tool surface, organized by compartment:
                                       task ledger in ~/.jarv/workbench (one agent
                                       walks the slices in order, checkpoints as files)
     sys     ps|ctx                   resident models + local footprint
-    app     probe|ui|do|keys         the hand: drive ANY app on this Mac (AppleScript
+    app     find|probe|ui|do|keys    the hand: drive ANY app on this Mac (AppleScript
                                       + System Events accessibility: click, type,
                                       menus, keystrokes). probe reports what the
                                       target exposes BEFORE anything is touched
@@ -36,6 +36,7 @@ import shlex
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 REPO = "/Users/tfe/fortress-hub"
@@ -53,9 +54,13 @@ def report(lines, status="ok"):
 def sh(cmd, timeout=60):
     try:
         r = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=timeout)
-        return (r.stdout + r.stderr).strip() or f"(exit {r.returncode}, no output)"
     except subprocess.TimeoutExpired:
         return f"TIMEOUT after {timeout}s"
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        # a bare empty reply hides the failure from the model — always mark it
+        return f"[exit {r.returncode}] {out}" if out else f"[exit {r.returncode}] (no output)"
+    return out or "(exit 0, no output)"
 
 
 def pipe(cmd, timeout=60):
@@ -78,13 +83,26 @@ def after_dash(a):
 
 # ── sense: read the world ────────────────────────────────────────────────────
 
+def _num(value, default):
+    """Arguments, not flags. The model often appends the `--` separator other
+    cabinet routes use (`sense fetch <url> -- 500`, `sense fs <path> -- 20`), so
+    a stray separator is dropped here instead of crashing int(). These values
+    are always counts/sizes, so any surviving sign is ignored."""
+    digits = str(value).strip().lstrip("-")
+    try:
+        return int(digits) if digits else default
+    except (TypeError, ValueError):
+        return default
+
+
 def sense_fs(path, lines):
+    lines = _num(lines, 100)
     if not os.path.exists(path):
         return report([f"not found: {path}"], status="error")
     if os.path.isdir(path):
-        return report([pipe(f"ls -la {shlex.quote(path)} | head -{min(int(lines), 100)}")])
+        return report([pipe(f"ls -la {shlex.quote(path)} | head -{min(lines, 100)}")])
     with open(path, errors="replace") as fh:
-        return report(["\n".join(fh.read().splitlines()[: max(1, min(int(lines), 500))])])
+        return report(["\n".join(fh.read().splitlines()[: max(1, min(lines, 500))])])
 
 
 def sense_grep(pattern, path):
@@ -92,6 +110,10 @@ def sense_grep(pattern, path):
 
 
 def sense_fetch(url, maxchars):
+    url = (url or "").strip()
+    if not url.lower().startswith(("http://", "https://", "file://")):
+        return report([f"fetch refused: only http(s)/file URLs (got: {url[:120] or '(empty)'})"],
+                      status="error")
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "jarv-toolkit/1.0"})
         data = urllib.request.urlopen(req, timeout=20).read()
@@ -99,7 +121,17 @@ def sense_fetch(url, maxchars):
             txt = data.decode("utf-8", "replace")
         except Exception:
             txt = f"<binary/undecodable {len(data)} bytes>"
-        return report([txt[: max(2000, int(maxchars))]])
+        return report([txt[: max(2000, _num(maxchars, 2000))]])
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read(500).decode("utf-8", "replace").strip()
+        except Exception:
+            detail = ""
+        lines = [f"fetch failed: HTTP {e.code} from {url}"]
+        if detail:
+            lines.append(f"server says: {detail[:400]}")
+        lines.append("the body usually names the exact bad parameter — fix the URL, don't retry it blind.")
+        return report(lines, status="error")
     except Exception as e:
         return report([f"fetch failed: {e}"], status="error")
 
@@ -504,31 +536,177 @@ def _osascript(script, timeout=30):
         return f"TIMEOUT after {timeout}s"
 
 
+# The hand must survive how the OPERATOR actually names apps ("the ace
+# browser", "text editor"), not just bundle-exact names. This resolver is the
+# ladder every app verb climbs; a miss TEACHES (closest candidates) instead of
+# silently acting on the wrong app (the "open up the ace browser" → Safari bug).
+
+_APP_DIRS = ("/System/Applications", "/Applications",
+             os.path.expanduser("~/Applications"),
+             "/System/Applications/Utilities", "/Applications/Utilities")
+_APP_CATEGORY_WORDS = frozenset(("app", "apps", "browser", "editor", "ide",
+                                 "the", "my", "open"))
+
+
+def _bundle_ok(path):
+    """A real app bundle: a directory with a Contents/ inside. Guards the
+    mdfind fallback against lookalikes (e.g. /usr/share/terminfo/…/iTerm.app,
+    a compiled terminfo entry, not an application)."""
+    return bool(path) and os.path.isdir(path) and os.path.isdir(
+        os.path.join(path, "Contents"))
+
+
 def app_path(name):
-    for base in ("/System/Applications", "/Applications",
-                 os.path.expanduser("~/Applications")):
+    """Locate an installed app bundle: exact name in the app dirs first, then
+    a validated Spotlight fallback. Single definition — the resolver below
+    (app_target/_app_candidates) is the operator-flavored ladder on top."""
+    for base in _APP_DIRS:
         for suffix in ("", ".app"):
             p = os.path.join(base, name.rstrip("/") + suffix)
             if os.path.isdir(p):
                 return p
-    hit = pipe(f"mdfind -name {shlex.quote(name)} 2>/dev/null | grep -m1 -e '\\.app$'", timeout=20)
+    hit = pipe(f"mdfind -name {shlex.quote(name)} 2>/dev/null | head -30", timeout=20)
     if not hit or hit.startswith(("Unknown option", "Usage:", "TIMEOUT", "(exit")):
         return None
-    return hit or None
+    lines = [l for l in hit.splitlines() if l.endswith(".app")]
+    apps = tuple(b.rstrip("/") + "/" for b in _APP_DIRS[:3])
+    lines.sort(key=lambda l: 0 if l.startswith(apps) else 1)  # app dirs first
+    for l in lines:
+        if _bundle_ok(l):
+            return l
+    return None
+
+
+def installed_apps():
+    """Names of the app bundles actually on this Mac (name without .app)."""
+    names = set()
+    for base in _APP_DIRS:
+        try:
+            for e in os.listdir(base):
+                if e.endswith(".app") and not e.startswith("."):
+                    names.add(e[:-4])
+        except OSError:
+            pass
+    return sorted(names)
+
+
+def _case_rank(name):
+    """0 for the properly-cased bundle, 1 for a stray lowercase twin. App
+    bundles on macOS are Title Case, so a same-name lowercase sibling (a half
+    finished copy of an installer) should always lose the tie."""
+    return 0 if any(c.isupper() for c in name) else 1
+
+
+def _app_candidates(q):
+    """Installed-app matches for a free-text name, best first. Scoring:
+    exact token == app word beats prefix match; shorter name breaks ties
+    ('Ace' wins over 'Ace something'); on a full tie the Title Case bundle
+    wins over a stray lowercase duplicate."""
+    lc = q.strip().lower()
+    installed = installed_apps()
+    lower = {}
+    for a in installed:                               # case-insensitive full
+        k = a.lower()
+        if k not in lower or _case_rank(a) < _case_rank(lower[k]):
+            lower[k] = a
+    if lc in lower:
+        return [lower[lc]]
+    tokens = [t for t in re.findall(r"[a-z0-9]+", lc)
+              if t not in _APP_CATEGORY_WORDS]
+    if not tokens:
+        tokens = [lc]
+    scored = []
+    for a in installed:
+        words = set(re.findall(r"[a-z0-9]+", a.lower()))
+        s = sum(2 if t in words
+                else 1 if any(w.startswith(t) or t.startswith(w) for w in words)
+                else 0
+                for t in tokens)
+        if s:
+            scored.append((s, -len(a), -_case_rank(a), a))
+    scored.sort(reverse=True)
+    return [a for _, _, _, a in scored]
+
+
+def _canonical_app_name(q):
+    """The on-disk stem with its real case, for an exact (case-insensitive)
+    bundle hit — so `terminal` resolves to `Terminal`, not the typed case."""
+    ql = q.strip().lower()
+    for base in _APP_DIRS:
+        try:
+            for e in os.listdir(base):
+                if e.endswith(".app") and e[:-4].lower() == ql:
+                    return e[:-4]
+        except OSError:
+            continue
+    return None
+
+
+def app_target(name):
+    """Resolve an operator-flavored app name to the installed bundle name.
+    Returns (real_name, []) on a hit, or (None, miss_lines) that teach: what
+    was tried and the nearest real candidates."""
+    q = (name or "").strip()
+    if not q:
+        return None, ["no app name given — usage: app find|probe|ui <name>"]
+    p = app_path(q)                                   # exact bundle hit
+    if p:
+        canon = _canonical_app_name(q)
+        if not canon and p.endswith(".app"):
+            canon = os.path.basename(p[:-4])          # stem of the real bundle
+        return canon or q, []
+    cands = _app_candidates(q)
+    if cands:
+        return cands[0], []
+    installed = installed_apps()
+    lc = q.lower()
+    fuzzy = [a for a in installed
+             if lc in a.lower() or any(t and t in a.lower() for t in lc.split())]
+    miss = [f"no installed app matches {q!r} "
+            "(tried exact name, case-insensitive, word match, Spotlight)"]
+    if fuzzy:
+        miss.append("did you mean: " + ", ".join(fuzzy[:6]))
+    miss.append("next: !kit app find <closer name> — or `!exec ls /Applications` "
+                "for the real bundle names")
+    return None, miss
+
+
+def app_find_verb(name):
+    """Resolve an app name BEFORE acting: the resolved bundle + the runners-up,
+    so a wrong pick is visible instead of silent."""
+    q = (name or "").strip()
+    if not q:
+        return report(["usage: app find <name> — e.g. app find ace browser"],
+                      status="error")
+    real, miss = app_target(q)
+    if real is None:
+        return report(miss, status="error")
+    path = app_path(real)
+    lines = [f"{q!r} → {real}" + (f"   ({path})" if path else "")]
+    rest = [a for a in _app_candidates(q) if a != real][:5]
+    if rest:
+        lines.append("other matches: " + ", ".join(rest))
+    lines.append(f"next: !kit app probe {real}  (recon before driving it)")
+    return report(lines)
 
 
 def app_probe(name):
-    """Read-only recon on an app BEFORE touching it: bundle location, scripting
-    dictionary, accessibility permission, running state."""
+    """Read-only recon on an app BEFORE touching it: what the name resolved
+    to, bundle location, scripting dictionary, accessibility, running state."""
     lines = []
-    path = app_path(name)
+    real, miss = app_target(name)
     status = "ok"
+    if real is None:
+        return report(miss, status="error")
+    if real.lower() != (name or "").strip().lower():
+        lines.append(f"resolved: {name!r} → {real}")
+    path = app_path(real)
     if not path:
-        lines.append(f"{name}: no bundle found in /Applications or ~/Applications.")
+        lines.append(f"{real}: no bundle found in /Applications or ~/Applications.")
         lines.append("you can still drive a RUNNING app by its process name via System Events.")
         status = "error"
     else:
-        lines.append(f"{name}: bundle at {path}")
+        lines.append(f"{real}: bundle at {path}")
         try:
             r = subprocess.run(["sdef", path], capture_output=True, text=True, timeout=20)
             if r.returncode == 0:
@@ -546,20 +724,23 @@ def app_probe(name):
         lines.append("PERMISSION: if 'false', grant Accessibility in System Settings → "
                      "Privacy & Security → Accessibility → add your terminal (and python3). Then re-probe.")
     running = _osascript('tell application "System Events" to get name of every process').lower()
-    lines.append(f"running now: {'yes' if name.lower() in running else 'not running — app probe/do will launch it'}")
-    lines.append("next: !kit app ui " + name + "  (UI tree)   |   !kit skill new " + name + " <goal>")
+    lines.append(f"running now: {'yes' if real.lower() in running else 'not running — app probe/do will launch it'}")
+    lines.append("next: !kit app ui " + real + "  (UI tree)   |   !kit skill new " + real + " <goal>")
     return report(lines, status=status)
 
 
 def app_ui(name):
+    real, miss = app_target(name)
+    if real is None:
+        return report(miss, status="error")
     ax = _osascript('tell application "System Events" to UI elements enabled')
     if "true" not in ax.lower():
         return report(["accessibility not granted — grant it in System Settings → "
                        "Privacy & Security → Accessibility (add your terminal + python3), then re-run"],
                       status="error")
-    script = (f'tell application "{name}" to activate\n'
+    script = (f'tell application "{real}" to activate\n'
               f'delay 0.4\n'
-              f'tell application "System Events" to tell process "{name}"\n'
+              f'tell application "System Events" to tell process "{real}"\n'
               f'  if (count of windows) is 0 then return "(no windows open)"\n'
               f'  get entire contents of front window\n'
               f'end tell')
@@ -579,7 +760,10 @@ def app_keys(name, expr):
     """Convenience hand: activate the app and type / keystroke.
     expr: 'type <text>'  → activate + type the text
           '<spec>'       → e.g. cmd+s, cmd+shift+r, opt+cmd+i"""
-    act = f'tell application "{name}" to activate\ndelay 0.3\ntell application "System Events"'
+    real, miss = app_target(name)
+    if real is None:
+        return report(miss, status="error")
+    act = f'tell application "{real}" to activate\ndelay 0.3\ntell application "System Events"'
     if expr.startswith("type "):
         txt = expr[5:].strip()
         s = f'{act} to keystroke {txt!r}\nend tell'
@@ -637,7 +821,7 @@ def probe():
 
 def ui():
     print(osa(f"tell application \\"{APP}\\" to activate\\n"
-              f"delayed 0.4\\ntell application \\"System Events\\" to tell process \\"{APP}\\" to get entire contents of front window"))
+              f"delay 0.4\\ntell application \\"System Events\\" to tell process \\"{APP}\\" to get entire contents of front window"))
 
 
 def do():
@@ -670,6 +854,15 @@ if __name__ == "__main__":
 
 
 def skill_new(appname, goal=""):
+    appname = appname.strip("\"' ")
+    goal = re.sub(r"^--\s*", "", goal or "")
+    if not app_path(appname):
+        apps = installed_apps()
+        names = ", ".join(apps[:10]) + (" …" if len(apps) > 10 else "")
+        return report([f"no installed app named '{appname}' — refusing to scaffold a skill for a phantom target.",
+                       f"installed apps include: {names}",
+                       "skills only cover apps that exist on this Mac — probe first (`app probe <App>`), "
+                       "or tell the operator which app they meant."], status="error")
     base = os.path.join(SKILLS_DIR, appname.rstrip("/").lower())
     os.makedirs(base, exist_ok=True)
     spath = os.path.join(base, "skill.py")
@@ -681,7 +874,8 @@ def skill_new(appname, goal=""):
         fh.write(f"# {appname} skill pack\n\ngoal: {goal or 'drive this app'}\n\n"
                  "model workflow: probe → ui → write ACTIONS → `skill run <app> <action>` → iterate.\n")
     return report([f"skill scaffolded: {spath}",
-                   "fill it in (one action at a time), then test:",
+                   "NEXT — do not stop here. Read the scaffold, then WRITE the real AppleScript ACTIONS "
+                   "into skill.py with !write (one action at a time), testing each:",
                    f"  python3 {spath} probe",
                    f"  python3 {spath} ui",
                    f"  python3 {spath} do <osascript...>",
@@ -705,6 +899,181 @@ def skill_run(appname, args):
     if not os.path.isfile(spath):
         return report([f"no skill for {appname} — scaffold one: !kit skill new {appname}"], status="error")
     return report([sh(f"python3 {shlex.quote(spath)} {args}", timeout=60)])
+
+
+# ── see: eyes + touch ────────────────────────────────────────────────────────
+# JARV looks at real pixels (screencapture + Apple Vision OCR through a
+# zero-install JXA bridge) and touches the screen (CGEvent synthetic clicks).
+# macOS gates both on permissions inherited from the launching Terminal:
+# Screen Recording for capture, Accessibility for input. No new installs.
+
+SCREENS = os.path.expanduser("~/.jarv/screens")
+
+
+def _jxa(script, timeout=60):
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", script],
+                           capture_output=True, text=True, timeout=timeout)
+        return (r.stdout + r.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return f"TIMEOUT after {timeout}s"
+
+
+def _shot(path, region=None):
+    """Capture the screen (or an x,y,w,h region) to `path`. Returns (ok, why)."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cmd = ["screencapture", "-x"] + (["-R", ",".join(map(str, region))] if region else []) + [path]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if r.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) < 1000:
+        why = (r.stderr.strip() or f"{os.path.getsize(path) if os.path.exists(path) else 0} B")
+        return False, f"capture failed ({why}) — grant Screen Recording to this Terminal"
+    return True, path
+
+
+def _pixels(path):
+    out = sh(f"sips -g pixelWidth -g pixelHeight {shlex.quote(path)}")
+    m = dict(re.findall(r"(pixel\w+):\s*(\d+)", out))
+    return int(m.get("pixelWidth", 0)), int(m.get("pixelHeight", 0))
+
+
+_OCR_TMPL = """
+ObjC.import('Vision'); ObjC.import('Foundation');
+const url = $.NSURL.fileURLWithPath('%(path)s');
+const handler = $.VNImageRequestHandler.alloc.initWithURLOptions(url, $());
+const req = $.VNRecognizeTextRequest.alloc.init;
+req.recognitionLevel = $.VNRequestTextRecognitionLevelAccurate;
+req.usesLanguageCorrection = false;
+req.recognitionLanguages = $.NSArray.arrayWithObject('en-US');
+handler.performRequestsError($.NSArray.arrayWithObject(req), null);
+const obs = req.results, n = obs.count, W = %(w)d, H = %(h)d, out = [];
+for (let i = 0; i < n; i++) {
+  const o = obs.objectAtIndex(i);
+  const c = o.topCandidates(1).objectAtIndex(0);
+  const b = ObjC.unwrap(o.boundingBox);
+  if (!c || !b || !b.origin) continue;
+  const x = Math.round(b.origin.x * W), y = Math.round((1 - b.origin.y - b.size.height) * H);
+  out.push([x, y, Math.round(b.size.width * W), Math.round(b.size.height * H),
+            String(ObjC.unwrap(c.string))].join('|'));
+}
+out.join('\\n')
+"""
+
+
+def _ocr(path, timeout=90):
+    """Vision OCR → [(x, y, w, h, text)] in top-left pixel coords."""
+    w, h = _pixels(path)
+    if not w or not h:
+        return []
+    raw = _jxa(_OCR_TMPL % {"path": path.replace("'", "'\\''"), "w": w, "h": h}, timeout)
+    rows = []
+    for line in raw.splitlines():
+        parts = line.split("|", 4)
+        if len(parts) == 5:
+            try:
+                rows.append((*map(int, parts[:4]), parts[4]))
+            except ValueError:
+                continue
+    return rows
+
+
+def _fmt_rows(rows):
+    if not rows:
+        return ["(no text seen on screen)"]
+    return [f"{x},{y} {w}x{h}  {t}" for x, y, w, h, t in sorted(rows, key=lambda r: (r[1] // 12, r[0]))]
+
+
+def _window_rect(proc, tries=4):
+    """Front window x,y,w,h of a process name, via System Events. System Events
+    can momentarily report no windows right after an app activates, so retry.
+    Uses the direct `tell process` form — the `first process whose name is`
+    scan is far slower and flakier."""
+    script = (
+        f'tell application "System Events" to tell process "{proc}"\n'
+        '  if (count of windows) is 0 then return "none"\n'
+        '  set p to position of front window\n'
+        '  set s to size of front window\n'
+        '  return (item 1 of p as text) & "," & (item 2 of p as text) & "," & (item 1 of s as text) & "," & (item 2 of s as text)\n'
+        'end tell'
+    )
+    for _ in range(tries):
+        raw = _osascript(script, 15)
+        m = re.match(r"^\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$", raw)
+        if m:
+            return tuple(map(int, m.groups()))
+        time.sleep(0.6)
+    return None
+
+
+def see_screen(which):
+    path = os.path.join(SCREENS, time.strftime("screen-%Y%m%d-%H%M%S") + ".png")
+    ok, why = _shot(path)
+    if not ok:
+        return report([why], status="error")
+    return report([f"screen → {path}"] + _fmt_rows(_ocr(path)))
+
+
+def see_app(name):
+    if not name.strip():
+        return report(["usage: see app <AppName>   (activate it, capture its front window, OCR)"],
+                      status="error")
+    tgt, miss = app_target(name)
+    if not tgt:
+        return report([f"no app found for {name!r} — try !kit app find {name}"] + miss, status="error")
+    _osascript(f'tell application "{tgt}" to activate\ndelay 0.5', 15)
+    rect = _window_rect(tgt[:-4] if tgt.endswith(".app") else tgt)
+    if not rect:
+        return report([f"{tgt}: no front window to look at (is it open?)"], status="error")
+    path = os.path.join(SCREENS, re.sub(r"\W+", "-", tgt.lower())[:30]
+                        + "-" + time.strftime("%H%M%S") + ".png")
+    ok, why = _shot(path, region=rect)
+    if not ok:
+        return report([why], status="error")
+    return report([f"{tgt} window {rect} → {path}"] + _fmt_rows(_ocr(path)))
+
+
+def _click(x, y, kind="left"):
+    script = (
+        "ObjC.import('CoreGraphics');\n"
+        f"const p = $.CGPointMake({int(x)}, {int(y)}), tap = $.kCGHIDEventTap;\n"
+        "$.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventMouseMoved, p, $.kCGMouseButtonLeft));\n"
+    )
+    if kind == "double":
+        script += ("for (let i = 0; i < 2; i++) {\n"
+                   "  $.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseDown, p, $.kCGMouseButtonLeft));\n"
+                   "  $.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseUp, p, $.kCGMouseButtonLeft));\n}\n")
+    elif kind == "right":
+        script += ("$.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventRightMouseDown, p, $.kCGMouseButtonRight));\n"
+                   "$.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventRightMouseUp, p, $.kCGMouseButtonRight));\n")
+    else:
+        script += ("$.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseDown, p, $.kCGMouseButtonLeft));\n"
+                   "$.CGEventPost(tap, $.CGEventCreateMouseEvent($(), $.kCGEventLeftMouseUp, p, $.kCGMouseButtonLeft));\n")
+    return _jxa(script, 20) or f"clicked {kind} at {int(x)},{int(y)}"
+
+
+def see_click(spec):
+    m = re.match(r"^(\d+)\s+(\d+)(?:\s+(right|double))?$", (spec or "").strip())
+    if not m:
+        return report(["usage: see click <x> <y> [right|double]   (coords come from see screen / see app)"],
+                      status="error")
+    x, y, kind = int(m.group(1)), int(m.group(2)), m.group(3) or "left"
+    return report([_click(x, y, kind)])
+
+
+def see_text(spec):
+    """Look, find `spec` in what's seen, click its centre. Eyes then hands."""
+    if not spec.strip():
+        return report(["usage: see text <words-on-screen>   (OCR the screen, click the match)"], status="error")
+    path = os.path.join(SCREENS, time.strftime("find-%H%M%S") + ".png")
+    ok, why = _shot(path)
+    if not ok:
+        return report([why], status="error")
+    rows = _ocr(path)
+    low = spec.strip().lower()
+    hit = next((r for r in rows if low in r[4].lower()), None)
+    if not hit:
+        return report([f"{spec!r} not on screen — what I see:"] + _fmt_rows(rows), status="error")
+    x, y, w, h, t = hit
+    return report([f"{t!r} at {x},{y} {w}x{h} → {_click(x + w // 2, y + h // 2)}"])
 
 
 # ── secur: the trusted principal ────────────────────────────────────────────────
@@ -757,8 +1126,9 @@ ROUTES = {
     ("mem", "lessons"): lambda a: mem_lessons(" ".join(a[3:])),
     ("mem", "stamp"): lambda a: mem_stamp(" ".join(a[3:])),
     ("mem", "timeline"): lambda a: mem_timeline(a[3] if len(a) > 3 else "5"),
-    ("app", "probe"): lambda a: app_probe(a[3]),
-    ("app", "ui"): lambda a: app_ui(a[3]),
+    ("app", "find"): lambda a: app_find_verb(" ".join(a[3:])),
+    ("app", "probe"): lambda a: app_probe(" ".join(a[3:])),
+    ("app", "ui"): lambda a: app_ui(" ".join(a[3:])),
     ("app", "do"): lambda a: app_do(a[3], " ".join(after_dash(a))),
     ("app", "keys"): lambda a: app_keys(a[3], " ".join(after_dash(a))),
     ("skill", "new"): lambda a: skill_new(a[3], " ".join(a[4:])),
@@ -776,6 +1146,10 @@ ROUTES = {
     ("sys", "ps"): lambda a: sys_ps(),
     ("sys", "ctx"): lambda a: sys_ctx(),
     ("sys", "self"): lambda a: sys_self(),
+    ("see", "screen"): lambda a: see_screen(a[3] if len(a) > 3 else "main"),
+    ("see", "app"): lambda a: see_app(a[3] if len(a) > 3 else ""),
+    ("see", "click"): lambda a: see_click(" ".join(a[3:])),
+    ("see", "text"): lambda a: see_text(" ".join(a[3:])),
     ("secur", "scan"): lambda a: secur_scan(" ".join(a[3:])),
     ("secur", "report"): lambda a: secur_report(a[3], a[4], " ".join(a[5:])),
     ("secur", "list"): lambda a: secur_list(),

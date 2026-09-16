@@ -385,7 +385,22 @@ def _wb_slug(title):
     return s[:24] or "project"
 
 
+def _wb_hint():
+    if not os.path.isdir(WORKBENCH):
+        return "no workbenches exist — run `arch init <title>` first"
+    existing = sorted(e for e in os.listdir(WORKBENCH) if not e.startswith("."))
+    return ("open workbenches: " + ", ".join(existing)) if existing else "no workbenches exist — run `arch init <title>` first"
+
+
 def arch_init(title):
+    os.makedirs(WORKBENCH, exist_ok=True)
+    existing = sorted(e for e in os.listdir(WORKBENCH) if not e.startswith("."))
+    if existing:
+        return report(
+            [f"a workbench is already open — {existing[0]}",
+             f"reuse it with `arch slice` / `arch result`; do NOT stack another one.",
+             f"clear the board with a shell rm of {WORKBENCH} before a fresh start."],
+            status="error")
     tid = f"{_wb_next_id()}-{_wb_slug(title)}"
     base = os.path.join(WORKBENCH, tid)
     os.makedirs(os.path.join(base, "results"), exist_ok=True)
@@ -398,7 +413,7 @@ def arch_slice(tid, summary, contract):
     base = os.path.join(WORKBENCH, tid)
     plan = os.path.join(base, "plan.md")
     if not os.path.exists(plan):
-        return report([f"no workbench {tid} (run `arch init`)"], status="error")
+        return report([f"no workbench {tid} — {_wb_hint()}"], status="error")
     n = 1 + max((int(m) for m in re.findall(r"SLICE-(\d+)", open(plan).read())), default=0)
     with open(plan, "a") as fh:
         fh.write(f"- [ ] SLICE-{n:02d} — {summary}\n    contract → results/{n:02d}.md\n")
@@ -408,7 +423,7 @@ def arch_slice(tid, summary, contract):
 def arch_result(tid, n, body):
     results = os.path.join(WORKBENCH, tid, "results")
     if not os.path.isdir(results):
-        return report([f"no workbench {tid}"], status="error")
+        return report([f"no workbench {tid} — {_wb_hint()}"], status="error")
     with open(os.path.join(results, f"{int(n):02d}.md"), "w") as fh:
         fh.write(body + ("\n" if not body.endswith("\n") else ""))
     return report([f"wrote results/{int(n):02d}.md"])  # worker returns DONE or BLOCKED
@@ -425,14 +440,14 @@ def arch_list():
 def arch_show(tid):
     plan = os.path.join(WORKBENCH, tid, "plan.md")
     if not os.path.exists(plan):
-        return report([f"no workbench {tid}"], status="error")
+        return report([f"no workbench {tid} — {_wb_hint()}"], status="error")
     return report([open(plan).read()])
 
 
 def arch_collect(tid):
     results = os.path.join(WORKBENCH, tid, "results")
     if not os.path.isdir(results):
-        return report([f"no workbench {tid}"], status="error")
+        return report([f"no workbench {tid} — {_wb_hint()}"], status="error")
     files = sorted(f for f in os.listdir(results) if f.endswith(".md"))
     if not files:
         return report([f"no results yet — slices are outstanding"])
@@ -442,7 +457,7 @@ def arch_collect(tid):
 def arch_close(tid, verdict):
     base = os.path.join(WORKBENCH, tid)
     if not os.path.exists(base):
-        return report([f"no workbench {tid}"], status="error")
+        return report([f"no workbench {tid} — {_wb_hint()}"], status="error")
     with open(os.path.join(base, "report.md"), "w") as fh:
         fh.write(f"# {tid} — merged verdict\n\n{verdict}\n")
     return report([f"closed {tid}: report.md written"])

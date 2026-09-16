@@ -686,6 +686,7 @@ def main():
                 break
 
             acted = False
+            failed_lines = {}     # REPEAT-HOLD latch: same-failure stops dead (per prompt)
             while next_lines:
                 line = next_lines.pop(0).strip()
                 if AUTH or line.startswith("!doc") or line.lower().startswith("!model "):
@@ -694,6 +695,16 @@ def main():
                     print(f"\x1b[31m⛔ locked: not run — {line[:200]}\x1b[0m")
                     turns.append({"role": "assistant", "content": line})
                     turns.append({"role": "system", "content": f"BLOCKED by the hard gate: no live password session. Chat is allowed; tools are not."})
+                    acted = True
+                    continue
+                if line in failed_lines:
+                    prev = failed_lines[line][:240]
+                    print(f"\x1b[31m⛔ repeat-hold: that exact command already failed this prompt:\x1b[0m")
+                    print(f"  {prev}")
+                    print(f"\x1b[31m   not run again — quote the error and change approach.\x1b[0m")
+                    turns.append({"role": "assistant", "content": line})
+                    turns.append({"role": "system",
+                                  "content": f"REPEAT-HOLD: `{line}` already failed this prompt with: {prev}. Not re-run. Quote the error and change approach."})
                     acted = True
                     continue
                 if line.startswith("!write"):
@@ -737,6 +748,8 @@ def main():
                         continue
                     print(f"\x1b[31m↳ !model: unknown '{mk}' (fast|arch)\x1b[0m")
                 out, newcwd = run_tool(line[1:].strip() if line == "!cwd" else line, cwd)
+                if out.startswith("error "):
+                    failed_lines[line] = out
                 if line.startswith("!cwd"):
                     cwd = newcwd if newcwd and os.path.isdir(newcwd) else cwd
                     print(f"\x1b[36m↳ cwd → {cwd}\x1b[0m")
@@ -782,7 +795,13 @@ def main():
                     contam = True
                     print("  \x1b[33m⚠ inbound web content entered context — auto-run is now paused until you type /ok for each step.\x1b[0m")
                 acted = True
-                mem_ping(" ".join(line.split()[:7]))
+                # Only stamp meaningful act-class milestones — skip reads/senses/queries and errors
+                if out and not out.startswith("error "):
+                    if any(line.startswith(p) for p in ("!edit", "!act ", "!write ", "!app ",
+                                                        "!kit act ", "!kit app ", "!kit edit ",
+                                                        "!kit skill ", "!kit arch init",
+                                                        "!git commit")):
+                        mem_ping(" ".join(line.split()[:7]))
 
             if body_lines and body_lines[-1].strip():
                 finish = "\n".join(body_lines).strip()

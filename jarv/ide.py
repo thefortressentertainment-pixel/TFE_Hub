@@ -524,7 +524,11 @@ def main():
     path = os.path.join(SESS_DIR, name + ".jsonl")
     turns, meta = (([], {"cwd": REPO, "model": "arch" if is_arch else "fast"})
                    if fresh else load_session(path))
-    model_key = meta.get("model") or ("arch" if is_arch else "fast")
+    # Boot ALWAYS starts on the fast chat model. `arch` (the Q8 thinking model)
+    # is a per-session escalation via `!model arch` / `--arch` — it must never
+    # leak across opens as a sticky default, or the next "hello" sits through
+    # ~20s of reasoning-model silence on this 8GB Mac.
+    model_key = "arch" if is_arch else "fast"
     cwd = meta.get("cwd") or REPO
     AUTH = auth_ok()
     banner(name, model_key, cwd, turns, op)

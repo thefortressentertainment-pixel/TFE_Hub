@@ -151,7 +151,24 @@ Events permissions; a missing permission is surfaced as a request with the exact
 System Settings path. "I don't have a tool for that app" is never the answer —
 it is the starting signal to build the skill.
 
-## 9 · Home
+## 9 · The Keyring (skeleton keys: drive ANY app)
+
+Alongside the hand (above) lives a generic driver ladder that every app can be
+plugged into without a bespoke skill: `!kit vehicle key <App>` shows the card
+(`~/.jarv/vehicles/<App>.md`; starters ship in `jarv/vehicles/` and seed on
+first use). `!kit vehicle probe <App>` reads the doors and
+`!kit vehicle drive <App> -- <src>` runs through the best live one — bundled
+scripting runtime (the strongest key: Blender/bpy, Maya/mel, Node, VBA) >
+a real AppleScript dictionary (osascript, single line) > System Events UI >
+`see` (OCR eyes + synthetic clicks, works on anything). For Blender,
+`!kit vehicle cockpit Blender` parks a background bpy server on a unix socket,
+so JARV drives the app's OWN live runtime and state persists between requests —
+renders, exports, batches run headless (`--background`); interactive work parks
+a cockpit. `vehicle new <App> -- <what it is>` cuts a fresh generic card and
+refuses phantom targets. A vehicle is the generic key; a skill (section 8)
+packs a specific task on top of it.
+
+## 10 · Home
 
 - `/Users/tfe/fortress-hub/jarv/` — the IDE, the cabinet, the doctrine docs.
 - `~/.jarv/` — sessions, shared memory, workbench, incident log.

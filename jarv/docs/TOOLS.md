@@ -17,6 +17,14 @@ one `!kit` line; the cabinet stays small so the model never thrashes choosing.
                                           screen or app window, then click it
     skill   new|list|run                  buy the missing tool: scaffold a skill
                                           pack in ~/.jarv/skills/<app>/ and iterate
+    vehicle probe|key|list|new|drive|cockpit
+                                          skeleton keys — drive ANY app through a
+                                          driver ladder (bundled scripting runtime
+                                          > osascript dict > System Events UI >
+                                          see). Cards in ~/.jarv/vehicles/<App>.md;
+                                          drive picks the strongest live door;
+                                          cockpit parks a console server (Blender/
+                                          bpy) so state persists between requests
     secur   scan|report|list              the swivel: detect, log, notify
 
 ## Quick rules

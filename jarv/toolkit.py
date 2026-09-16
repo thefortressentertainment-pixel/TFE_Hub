@@ -22,6 +22,13 @@ JARV ONE plain-tool surface, organized by compartment:
     skill   new|list|run             buy the missing tool: scaffold a self-contained
                                       skill pack in ~/.jarv/skills/<app>/ that JARV
                                       fills, tests and iterates until the task works
+    vehicle probe|key|list|new|drive|cockpit
+                                      skeleton keys: drive ANY app through a driver
+                                      ladder (bundled scripting runtime > osascript
+                                      dict > System Events UI > see). Cards in
+                                      ~/.jarv/vehicles/<App>.md; drive picks the
+                                      strongest live door; cockpit parks a console
+                                      server (Blender/bpy) for interactive tasks
     secur   scan|report|list         the swivel: detect hostile content, log every
                                       encounter, notify the operator (SECURITY.md)
 
@@ -33,6 +40,7 @@ import json
 import os
 import re
 import shlex
+import socket
 import subprocess
 import sys
 import time
@@ -475,6 +483,227 @@ def _scan_text(text):
     elif long_blob:
         hits.append(f"[medium] encoded-blob — {len(long_blob)} long opaque segments (suspect unless explained)")
     return hits
+
+
+# ── vehicle: skeleton keys ───────────────────────────────────────────────────
+# One small cabinet: every app gets a DRIVER LADDER — bundled scripting runtime
+# (console: Blender/bpy, Maya/mel, Node, VBA …) is the strongest key, then a
+# real AppleScript dictionary (osascript), then System Events UI, then `see`
+# (OCR eyes + synthetic clicks). A vehicle card is a tiny markdown file under
+# ~/.jarv/vehicles/<App>.md (pristine starters ship in jarv/vehicles/ and seed on
+# first use). `probe` reads the doors, `key` shows the card, `drive` picks the
+# strongest live door, `cockpit` parks a console server when the app has one.
+# Skills stay as-is: a vehicle is the generic key, a skill packs a task.
+
+VEHICLES_DIR = os.path.expanduser("~/.jarv/vehicles")
+_VEH_SEED = os.path.join(REPO, "jarv", "vehicles")
+
+
+def _seed_vehicles():
+    if not os.path.isdir(VEHICLES_DIR):
+        try:
+            os.makedirs(VEHICLES_DIR, exist_ok=True)
+        except OSError:
+            return
+    if os.path.isdir(_VEH_SEED):
+        for f in os.listdir(_VEH_SEED):
+            if not f.endswith(".md") or f.startswith("."):
+                continue
+            s = os.path.join(_VEH_SEED, f)
+            d = os.path.join(VEHICLES_DIR, f)
+            if not os.path.isfile(d) and os.path.isfile(s):
+                with open(s) as fh:
+                    with open(d, "w") as gh:
+                        gh.write(fh.read())
+
+
+def _vehicle_card(app):
+    if not os.path.isdir(VEHICLES_DIR):
+        return None, None
+    want = app.rstrip("/").lower()
+    for f in os.listdir(VEHICLES_DIR):
+        if f.endswith(".md") and f[:-3].lower() == want:
+            p = os.path.join(VEHICLES_DIR, f)
+            with open(p) as fh:
+                return p, fh.read()
+    return None, None
+
+
+def _card_meta(text):
+    meta = {}
+    for k in ("driver", "binary"):
+        m = re.search(rf"^- {k}:\s*(.*)$", text, re.M)
+        if m:
+            meta[k] = m.group(1).strip().split("#", 1)[0].strip()
+    return meta
+
+
+def _bpy_socket():
+    return os.path.join(VEHICLES_DIR, "blender.sock")
+
+
+def _bpy_live():
+    s = _bpy_socket()
+    if not os.path.exists(s):
+        return False
+    try:
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.settimeout(2)
+        c.connect(s)
+        c.close()
+        return True
+    except OSError:
+        return False
+
+
+def _bpy_task(src):
+    if not _bpy_live():
+        return None, "no live cockpit — park one first: `vehicle cockpit <App>`"
+    try:
+        c = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        c.settimeout(30)
+        c.connect(_bpy_socket())
+        c.sendall(json.dumps({"src": src}).encode())
+        c.shutdown(socket.SHUT_WR)
+        data = b""
+        while True:
+            chunk = c.recv(8192)
+            if not chunk:
+                break
+            data += chunk
+        c.close()
+        return json.loads(data.decode()), None
+    except Exception as exc:
+        return None, f"cockpit error: {exc} — is the app still running?"
+
+
+def vehicle_list():
+    _seed_vehicles()
+    if not os.path.isdir(VEHICLES_DIR):
+        return report(["(no vehicles parked — cut a key: !kit vehicle new <App> -- <what it is>)"])
+    rows = []
+    for f in sorted(os.listdir(VEHICLES_DIR)):
+        if not f.endswith(".md") or f.startswith("."):
+            continue
+        p = os.path.join(VEHICLES_DIR, f)
+        with open(p) as fh:
+            meta = _card_meta(fh.read())
+        door = meta.get("driver", "ladder")
+        if door == "console":
+            door += " [cockpit " + ("live]" if _bpy_live() else "parked]")
+        rows.append(f"{f[:-3]:<14} door: {door:<22} ({os.path.getsize(p)} B)")
+    rows.append("cut new keys: !kit vehicle new <App> -- <what it is>")
+    return report(rows)
+
+
+def vehicle_probe(name):
+    _seed_vehicles()
+    real, miss = app_target(name)
+    if real is None:
+        return report(miss, status="error")
+    lines = [f"{real}: vehicle card "]
+    cardp, card = _vehicle_card(real)
+    if cardp:
+        meta = _card_meta(card)
+        lines.append(f"  card: {cardp}  door: {meta.get('driver', 'ladder')}")
+    else:
+        lines.append("  card: none — cut one: !kit vehicle new " + real + " -- <what it is>")
+    if "binary:" in card:
+        binary = _card_meta(card).get("binary")
+        lines.append(f"  console binary: {binary}  ({'present' if binary and os.path.isfile(binary) else 'MISSING'})")
+        if _bpy_live():
+            lines.append("  cockpit socket: live (" + _bpy_socket() + ")")
+        else:
+            lines.append("  cockpit socket: idle — park one: !kit vehicle cockpit " + real)
+    lines.append("  ladder always available: System Events UI (`app probe`/`app ui`) + see (OCR clicks).")
+    lines.append("probe the AppleScript/UI doors too: !kit app probe " + real)
+    return report(lines)
+
+
+def vehicle_key(name):
+    _seed_vehicles()
+    cardp, card = _vehicle_card(name)
+    if not cardp:
+        return report([f"no vehicle card for {name!r} — cut one: !kit vehicle new {name} -- <what it is>"],
+                      status="error")
+    return report([f"key: {cardp}", card[:1500]])
+
+
+def vehicle_drive(app, src):
+    if not (src or "").strip():
+        return report([f"usage: vehicle drive {app} -- <driver src>  (ladder: console > osascript > ui > see)"],
+                      status="error")
+    _seed_vehicles()
+    cardp, card = _vehicle_card(app)
+    meta = _card_meta(card) if card else {}
+    driver = meta.get("driver", "ladder")
+    if driver == "console":
+        if _bpy_live():
+            data, err = _bpy_task(src)
+            if err:
+                return report([err], status="error")
+            return report([f"cockpit reply ({app}):", json.dumps(data)[:MAX_OUT]])
+        binary = meta.get("binary")
+        if binary and os.path.isfile(binary):
+            wrapped = src
+            if re.search(r"\bresult\s*=", src):
+                wrapped += "\nprint('RESULT: ' + repr(result))"
+            return report([sh(f"{shlex.quote(binary)} --background --factory-startup --python-expr {shlex.quote(wrapped)}", timeout=180)])
+        return report([f"card says console but the 'binary:' line is missing or not a real path — fix {cardp}"],
+                      status="error")
+    if driver == "osascript":
+        return app_do(app, src)
+    return report([f"{app} has no scriptable door (card driver: {driver}) — use the ladder:",
+                   f"  !kit app probe {app}    !kit app ui {app}",
+                   f"  !kit see screen | see app {app} | see text <label> | see click <x> <y>",
+                   "or cut the card as console if it bundles a scripting runtime:",
+                   f"  !kit vehicle new {app} -- <what it is>"], status="error")
+
+
+def vehicle_cockpit(app):
+    _seed_vehicles()
+    cardp, card = _vehicle_card(app)
+    meta = _card_meta(card) if card else {}
+    binary = meta.get("binary")
+    if not card or meta.get("driver") != "console" or not (binary and os.path.isfile(binary)):
+        return report([f"{app} has no console cockpit door (needs a console vehicle card with a live 'binary:')"],
+                      status="error")
+    if _bpy_live():
+        return report([f"cockpit already live on {_bpy_socket()}"])
+    server = os.path.join(_VEH_SEED, "blender_server.py")
+    log = os.path.expanduser("~/.jarv/cockpit.log")
+    os.makedirs(VEHICLES_DIR, exist_ok=True)
+    subprocess.Popen([binary, "--background", "--factory-startup", "--python", server],
+                     stdout=open(log, "a"), stderr=subprocess.STDOUT)
+    for _ in range(60):
+        time.sleep(0.25)
+        if _bpy_live():
+            return report([f"cockpit live on {_bpy_socket()} — drive it: vehicle drive {app} -- <bpy src>",
+                           f"log: {log}"])
+    return report([f"cockpit did not answer in 15s — tail {log}"], status="error")
+
+
+def vehicle_new(app, what=""):
+    _seed_vehicles()
+    app = app.strip("\"' ")
+    if not app_path(app):
+        apps = installed_apps()
+        names = ", ".join(apps[:10]) + (" …" if len(apps) > 10 else "")
+        return report([f"no installed app named '{app}' — refusing to cut a key for a phantom target.",
+                       f"installed apps include: {names}"], status="error")
+    real, _ = app_target(app)
+    dst = os.path.join(VEHICLES_DIR, (real or app).lower() + ".md")
+    if os.path.isfile(dst):
+        return report([f"vehicle already parked: {dst} — show it with `vehicle key {real}` or edit the file."],
+                      status="error")
+    with open(os.path.join(_VEH_SEED, "_generic.md")) as fh:
+        tmpl = fh.read()
+    with open(dst, "w") as fh:
+        fh.write(tmpl % {"app": real or app})
+    return report([f"key cut: {dst}",
+                   "next: !kit vehicle probe " + (real or app) + "   |   !kit vehicle key " + (real or app),
+                   "if the app bundles its own scripting runtime (Blender/bpy, Maya/mel, Node, Excel/VBA) "
+                   "edit the card to `driver: console` + add a 'binary:' line — that is its strongest key."])
 
 
 def secur_scan(text):
@@ -1134,6 +1363,12 @@ ROUTES = {
     ("skill", "new"): lambda a: skill_new(a[3], " ".join(a[4:])),
     ("skill", "list"): lambda a: skill_list(),
     ("skill", "run"): lambda a: skill_run(a[3], " ".join(after_dash(a))),
+    ("vehicle", "probe"): lambda a: vehicle_probe(" ".join(a[3:])),
+    ("vehicle", "key"): lambda a: vehicle_key(" ".join(a[3:])),
+    ("vehicle", "list"): lambda a: vehicle_list(),
+    ("vehicle", "new"): lambda a: vehicle_new(a[3], " ".join(a[4:])),
+    ("vehicle", "drive"): lambda a: vehicle_drive(a[3], " ".join(after_dash(a))),
+    ("vehicle", "cockpit"): lambda a: vehicle_cockpit(" ".join(a[3:])),
     ("arch", "init"): lambda a: arch_init(" ".join(a[3:])),
     ("arch", "slice"): lambda a: arch_slice(a[3], a[4], " ".join(a[5:])),
     ("arch", "result"): lambda a: arch_result(a[3], a[4], " ".join(a[5:])),

@@ -115,6 +115,23 @@ def self_core_hit(text):
     return None
 
 
+# Read-only shell commands that may NAME a core file without touching it. A mutator
+# token anywhere in the line defeats the whitelist (cat x > core, grep x | tee core,
+# ls a; echo b >> core  — all still gated).
+def _read_only_core_cmd(cmd):
+    low = " " + cmd.strip().lower()
+    if any(m in low for m in (" >", ">>", "tee ", "sed -i", "dd ", "patch ",
+                              "perl -i", "install ", "ln ")):
+        return False
+    if low.strip().startswith("sed ") and " -i" not in low:
+        return True
+    heads = ("ls ", "cat ", "grep ", "head ", "tail ", "file ", "wc ", "find ",
+             "diff ", "shasum ", "stat ", "git status", "git diff", "git log",
+             "git show", "python3 -m py_compile ", "node --check", "bash -n",
+             "plutil -lint")
+    return low.strip().startswith(heads)
+
+
 # Read-only cabinet routes never mutate the engine; anything else that names a
 # core file is gated. Fail-closed: unknown subcommands count as mutators.
 # NB no `skill run` here: running a skill pack executes code, so it is not a
@@ -298,7 +315,8 @@ def run_tool(line, cwd):
     if head == "!exec":
         if not arg:
             return "!exec: no command", cwd
-        if self_core_hit(arg):
+        hit = self_core_hit(arg)
+        if hit and not _read_only_core_cmd(arg):
             return "_self_core_pending_", cwd  # self-surgery via shell — operator's /ok
         if __web_exec(arg):
             return "_web_exec_pending_", cwd  # loop queues this for the operator's /ok

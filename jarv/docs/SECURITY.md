@@ -130,16 +130,21 @@ or an adversarial AI engagement.
 - Fetch-and-execute in a single command (`curl … | sh`, `bash <(curl …)`,
   download then run) is auto-queued and never runs until the operator types
   `/ok` in the live terminal — inbound artifacts never drive actions unprompted.
-- Self-surgery is gated: any command text — `!write` or a shell (`!exec`,
-  `!kit`) — that reaches into `ide.py`, `toolkit.py`, or `vault.py` is queued for
-  the operator's explicit `/ok` and nothing else can run it; an empty-body write
-  is refused outright (it would truncate its target). This covers BOTH copies of
-  the engine: the live sources under `jarv/` and the decrypted payload the IDE
-  actually runs from (`~/.jarv/vault/run/`). A bare filename next to a shell
-  mutator (`echo … >> jarv/ide.py`, `cp x ide.py`, `sed -i … toolkit.py`) is
-  caught too, and only genuinely read-only cabinet routes are exempt — `skill
-  run` executes code, so it is not one of them. JARV can improve itself but can
-  never amputate itself in one blind stroke.
+- Self-surgery is gated: any command that MUTATES `ide.py`, `toolkit.py`, or
+  `vault.py` — `!write`, or a shell (`!exec`, `!kit`) reach with write intent
+  (`>`, `>>`, `tee`, `sed -i`, `cp`, `mv`, `dd`, `rm`, python writes, …) on a
+  full, repo-relative, or bare filename — is queued for the operator's explicit
+  `/ok` and nothing else can run it; an empty-body write is refused outright (it
+  would truncate its target). This covers BOTH copies of the engine: the live
+  sources under `jarv/` and the decrypted payload the IDE actually runs from
+  (`~/.jarv/vault/run/`). Read-only inspection (`ls`/`cat`/`grep`/`head`/diff/
+  `!read`/`!kit sense fs`, compile checks) is free and always allowed; if a line
+  mixes a read head with a mutation token (`cat x > ide.py`, `grep … | tee
+  vault.py`, `ls a; echo b >> toolkit.py`) it is still gated. A bare filename
+  next to a shell mutator (`echo … >> jarv/ide.py`, `cp x ide.py`,
+  `sed -i … toolkit.py`) is caught too, and only genuinely read-only routes are
+  exempt — `skill run` executes code, so it is not one of them. JARV can improve
+  itself but can never amputate itself in one blind stroke.
 - The session token is bound to the launcher process: it records the pid of the
   `vault.py` that unlocked the vault, and `auth_ok()` accepts it only while that
   process is still alive and is JARV's own parent. A token left behind by a
